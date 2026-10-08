@@ -1,6 +1,6 @@
 # issue-channel
 
-Talk to a running Claude Code session through a GitHub issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Design and validation: [#9](https://github.com/iamwrm/mainbot/issues/9). Codex support is backlogged in [#10](https://github.com/iamwrm/mainbot/issues/10).
+Talk to a running Claude Code session through a GitHub issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Design and validation: [#9](https://github.com/iamwrm/mainbot/issues/9). Backlog (Codex support, hardening): [`BACKLOG.md`](BACKLOG.md).
 
 ```
 GitHub ──signed webhook──► Cloudflare tunnel ──► server (container, SQLite)
@@ -9,7 +9,7 @@ GitHub ──signed webhook──► Cloudflare tunnel ──► server (contain
 ```
 
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
-- `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
+- `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary, then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
 
 ## Deploy (this host)
@@ -53,13 +53,17 @@ Then say: *"create a new issue in iamwrm/xxx and listen to it"*. The repo needs 
 | `ISSUECHAN_API_KEY` | `API_KEY` from `ISSUECHAN_ENV_FILE` (`~/.local/share/issue-channel/.env`) |
 | `ISSUECHAN_SESSION` | `default`; also settable via `issue_subscribe({session})` |
 | `ISSUECHAN_ALLOWED_AUTHORS` | the repo owner |
+| `ISSUECHAN_REACTION` | `eyes`: the channel adds 👀 to each delivered `/bot` comment through the local `gh` login; set it to empty to disable |
+| `ISSUECHAN_DONE_REACTION` | `rocket`: replaces 👀 when the job is done (GitHub has no ✅ reaction); set it to empty to disable |
 
 ### `/bot` rules
 
-- A comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order.
+- A **newly created** comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order. Edits never trigger, including edits of a `/bot` comment. They wait in the buffer for the next `/bot`.
+- An edit of a comment the agent has already seen is delivered with a diff against the version the agent saw, plus the full new text. An edit that restores exactly what the agent saw is dropped. Deleting a comment the agent has already seen is reported. Deleting one it hasn't seen just drops it.
 - `/bot <name>` (a single token on the first line) targets a named session. If `<name>` is not an active session on that issue, the comment counts as untargeted (for example `/bot hi`).
 - Idle session: Claude starts a new turn. Busy session: the message lands after the current tool call, inside the same turn. Text Claude is already streaming is not interrupted.
-- The channel resumes from the last delivered trigger when a session re-subscribes, so comments made while it was down are not lost.
+- Request lifecycle: 👀 when a `/bot` is delivered, 🚀 when the agent marks it done (`issue_reply` with `done` defaulting to true, or `issue_done`). Open requests are saved with the subscription. A deleted comment, or a 👀 that's already gone, is tolerated.
+- Subscriptions are saved per Claude Code session (`CLAUDE_CODE_SESSION_ID`, in `~/.local/state/issue-channel/`). They are restored automatically after `/mcp` reconnect or `clauded --resume`/`--continue`, from the last delivered trigger, so comments made while the channel was down are not lost. A new session starts with no subscriptions.
 
 ## API
 

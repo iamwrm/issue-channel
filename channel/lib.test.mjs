@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseTrigger, isForSession, IssueBuffer, formatDelivery, BOT_MARKER } from './lib.mjs'
+import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, lineDiff, BOT_MARKER } from './lib.mjs'
 
 test('parseTrigger', () => {
   assert.deepEqual(parseTrigger('/bot'), { target: null })
@@ -43,4 +43,72 @@ test('deleted comments leave the buffer', () => {
   b.add(c(1, 10, 'oops'))
   b.add(c(2, 10, 'oops', 'deleted'))
   assert.equal(b.drain().length, 0)
+})
+
+test('formatReply: plain summary line, then a Full reply toggle, then the marker', () => {
+  const out = formatReply({ summary: 'Answer: <43>\n ok', body: 'Full **text**\n\nline 2' })
+  assert.equal(out, `Answer: &lt;43&gt; ok\n\n<details>\n<summary>Full reply</summary>\n\nFull **text**\n\nline 2\n\n</details>\n\n${BOT_MARKER}\n`)
+  assert.throws(() => formatReply({ summary: ' ', body: 'x' }), /summary/)
+  assert.throws(() => formatReply({ summary: 's', body: '' }), /body/)
+})
+
+test('C: edits never trigger, only new /bot comments do', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  assert.ok(b.add(c(1, 10, '/bot do x')))
+  b.drain()
+  assert.equal(b.add(c(2, 10, '/bot do y', 'edited')), null, 'edited /bot does not re-trigger')
+  assert.equal(b.add(c(3, 11, 'plain → /bot later', 'edited')), null)
+  const trig = b.add(c(4, 12, '/bot next'))
+  assert.ok(trig)
+  const items = b.drain()
+  assert.deepEqual(items.map(i => [i.id, i.action]), [[10, 'edited'], [11, 'edited'], [12, 'created']])
+})
+
+test('B: edits of delivered comments carry a diff against what the agent saw', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  b.add(c(1, 10, 'value is 43\nkeep this'))
+  b.add(c(2, 11, '/bot read'))
+  b.drain()
+  b.add(c(3, 10, 'value is 44\nkeep this', 'edited'))
+  b.add(c(4, 10, 'value is 45\nkeep this', 'edited'))
+  const trig = b.add(c(5, 12, '/bot again'))
+  const items = b.drain()
+  assert.equal(items[0].previous, 'value is 43\nkeep this', 'diff base is what the agent saw, not the intermediate edit')
+  const text = formatDelivery({ repo: 'o/r', issue: 1, title: 'T', trigger: trig, items })
+  assert.match(text, /```diff\n- value is 43\n\+ value is 45\n  keep this\n```/)
+  // An undelivered comment edited before /bot has no diff.
+  b.add(c(6, 13, 'draft'))
+  b.add(c(7, 13, 'final', 'edited'))
+  b.add(c(8, 14, '/bot'))
+  const [first] = b.drain()
+  assert.equal(first.previous, undefined)
+  assert.equal(first.body, 'final')
+})
+
+test('B: deleting a delivered comment is reported; editing back to the seen text is a no-op', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  b.add(c(1, 10, 'keep'))
+  b.add(c(2, 11, 'drop me'))
+  b.add(c(3, 12, '/bot'))
+  b.drain()
+  b.add(c(4, 11, 'drop me', 'deleted'))
+  b.add(c(5, 10, 'changed', 'edited'))
+  b.add(c(6, 10, 'keep', 'edited'))
+  const trig = b.add(c(7, 13, '/bot'))
+  const items = b.drain()
+  assert.deepEqual(items.map(i => [i.id, i.action]), [[11, 'deleted'], [13, 'created']])
+  assert.match(formatDelivery({ repo: 'o/r', issue: 1, title: null, trigger: trig, items }), /was deleted. It said:\ndrop me/)
+})
+
+test('markDelivered seeds diff bases after a restart', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  b.markDelivered(c(1, 10, 'v1'))
+  b.markDelivered(c(2, 10, 'v2', 'edited'))
+  b.add(c(3, 10, 'v3', 'edited'))
+  b.add(c(4, 11, '/bot'))
+  assert.equal(b.drain()[0].previous, 'v2')
+})
+
+test('lineDiff', () => {
+  assert.equal(lineDiff('a\nb\nc', 'a\nB\nc'), '  a\n- b\n+ B\n  c')
 })

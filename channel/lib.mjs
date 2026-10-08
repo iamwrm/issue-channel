@@ -25,6 +25,7 @@ export class IssueBuffer {
   constructor({ allowedAuthors }) {
     this.allowed = new Set(allowedAuthors.map(a => a.toLowerCase()))
     this.items = new Map()
+    this.delivered = new Map() // key -> body the agent last received
     this.title = null
   }
 
@@ -33,32 +34,97 @@ export class IssueBuffer {
   }
 
   // Returns a trigger object when this event should flush the buffer, else null.
+  // Only newly created /bot comments trigger; edits just update the buffer.
   add(ev) {
     if (ev.title) this.title = ev.title
     if (ev.event === 'issue_comment') {
       const key = `comment:${ev.comment_id}`
-      if (ev.action === 'deleted') { this.items.delete(key); return null }
+      if (ev.action === 'deleted') {
+        this.items.delete(key)
+        // Tell the agent when a comment it has already seen disappears.
+        if (this.delivered.has(key)) {
+          this.items.set(key, { kind: 'comment', id: ev.comment_id, action: 'deleted', author: ev.author, body: this.delivered.get(key), at: ev.updated_at, seq: ev.seq })
+        }
+        return null
+      }
       if (ev.action !== 'created' && ev.action !== 'edited') return null
       if ((ev.body ?? '').includes(BOT_MARKER)) return null
       if (!this.allowedAuthor(ev.author)) return null
+      const body = ev.body ?? ''
+      const seen = this.delivered.get(key)
+      if (seen === body) { this.items.delete(key); return null } // edited back to what the agent saw
       this.items.delete(key)
-      this.items.set(key, { kind: 'comment', id: ev.comment_id, action: ev.action, author: ev.author, body: ev.body ?? '', at: ev.updated_at, seq: ev.seq })
-      const trig = parseTrigger(ev.body)
+      this.items.set(key, {
+        kind: 'comment', id: ev.comment_id, action: ev.action, author: ev.author, body, at: ev.updated_at, seq: ev.seq,
+        previous: ev.action === 'edited' ? seen : undefined,
+      })
+      const trig = ev.action === 'created' ? parseTrigger(body) : null
       return trig ? { ...trig, author: ev.author, comment_id: ev.comment_id, seq: ev.seq } : null
     }
     if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened')) {
       if (!this.allowedAuthor(ev.author) || (ev.body ?? '').includes(BOT_MARKER)) return null
+      const body = ev.body ?? ''
+      const seen = this.delivered.get('issue')
+      if (seen === body) { this.items.delete('issue'); return null }
       this.items.delete('issue')
-      this.items.set('issue', { kind: 'issue', action: ev.action, author: ev.author, body: ev.body ?? '', at: ev.updated_at, seq: ev.seq })
+      this.items.set('issue', { kind: 'issue', action: ev.action, author: ev.author, body, at: ev.updated_at, seq: ev.seq, previous: seen })
     }
     return null
+  }
+
+  // Record what the agent saw before this process started (used to diff later edits).
+  markDelivered(ev) {
+    if (ev.event === 'issue_comment') {
+      const key = `comment:${ev.comment_id}`
+      if (ev.action === 'deleted') this.delivered.delete(key)
+      else if ((ev.action === 'created' || ev.action === 'edited') && this.allowedAuthor(ev.author) && !(ev.body ?? '').includes(BOT_MARKER)) {
+        this.delivered.set(key, ev.body ?? '')
+      }
+    } else if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened') && this.allowedAuthor(ev.author)) {
+      this.delivered.set('issue', ev.body ?? '')
+    }
+    if (ev.title) this.title = ev.title
   }
 
   drain() {
     const items = [...this.items.values()].sort((a, b) => a.seq - b.seq)
     this.items.clear()
+    for (const it of items) {
+      const key = it.kind === 'issue' ? 'issue' : `comment:${it.id}`
+      if (it.action === 'deleted') this.delivered.delete(key)
+      else this.delivered.set(key, it.body)
+    }
     return items
   }
+}
+
+// Minimal line diff (LCS); fine for issue-comment sized text.
+export function lineDiff(a, b) {
+  const x = a.split('\n'), y = b.split('\n')
+  const n = x.length, m = y.length
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) {
+    dp[i][j] = x[i] === y[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+  }
+  const out = []
+  let i = 0, j = 0
+  while (i < n && j < m) {
+    if (x[i] === y[j]) { out.push(`  ${x[i]}`); i++; j++ } else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(`- ${x[i++]}`)
+    else out.push(`+ ${y[j++]}`)
+  }
+  while (i < n) out.push(`- ${x[i++]}`)
+  while (j < m) out.push(`+ ${y[j++]}`)
+  return out.join('\n')
+}
+
+// Reply layout on the issue: a plain one-line summary, then a clickable "Full reply" toggle.
+export function formatReply({ summary, body }) {
+  const line = String(summary ?? '').replace(/\s+/g, ' ').trim()
+  if (!line) throw new Error('summary is required')
+  const full = String(body ?? '').trim()
+  if (!full) throw new Error('body is required')
+  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${BOT_MARKER}\n`
 }
 
 export function formatDelivery({ repo, issue, title, trigger, items }) {
@@ -68,6 +134,8 @@ export function formatDelivery({ repo, issue, title, trigger, items }) {
     const label = it.kind === 'issue'
       ? `[issue body · @${it.author} · ${it.action}]`
       : `[comment ${it.id} · @${it.author} · ${it.action}${it.at ? ` · ${it.at}` : ''}]`
+    if (it.action === 'deleted') return `${label}\nThis comment you saw earlier was deleted. It said:\n${it.body}`
+    if (it.previous != null) return `${label}\nChanged since you last saw it:\n\`\`\`diff\n${lineDiff(it.previous, it.body)}\n\`\`\`\nFull text now:\n${it.body}`
     return `${label}\n${it.body}`
   })
   return `${head}\n${items.length} new/edited item(s) since the last delivery:\n\n${parts.join('\n\n')}`
