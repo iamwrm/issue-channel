@@ -1,6 +1,6 @@
 # issue-channel
 
-Talk to a running Claude Code session through a GitHub issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Design and validation: [#9](https://github.com/iamwrm/mainbot/issues/9). Backlog (Codex support, hardening): [`BACKLOG.md`](BACKLOG.md).
+Talk to a running Claude Code session through a GitHub issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Design, decisions and validation: [`DESIGN.md`](DESIGN.md). Backlog (Codex support, hardening): [`BACKLOG.md`](BACKLOG.md).
 
 ```
 GitHub ──signed webhook──► Cloudflare tunnel ──► server (container, SQLite)

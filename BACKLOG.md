@@ -2,7 +2,7 @@
 
 ## Codex support via app-server bridge (turn/start + turn/steer)
 
-Follow-up to [#9](https://github.com/iamwrm/mainbot/issues/9). Add Codex support to issue-channel through a **Codex app-server bridge**. Claude Code support uses a channel ([#9](https://github.com/iamwrm/mainbot/issues/9)). Codex has no channel equivalent, and its background hooks can't wake an idle session ("Finishing a background hook doesn't start a new turn").
+Follow-up to [`DESIGN.md`](DESIGN.md). Add Codex support to issue-channel through a **Codex app-server bridge**. Claude Code support uses a channel ([`DESIGN.md`](DESIGN.md)). Codex has no channel equivalent, and its background hooks can't wake an idle session ("Finishing a background hook doesn't start a new turn").
 
 ### Design
 
@@ -26,7 +26,7 @@ Follow-up to [#9](https://github.com/iamwrm/mainbot/issues/9). Add Codex support
 
 ### Validate first
 - [ ] Two clients on one thread: does the `--remote` TUI render turns started or steered by the bridge?
-- [ ] Busy/idle/burst/long-idle matrix, as in [#9](https://github.com/iamwrm/mainbot/issues/9)'s Claude validation (tmux).
+- [ ] Busy/idle/burst/long-idle matrix, as in the Claude validation in [`DESIGN.md`](DESIGN.md#validation-2026-10-08-claude-code-21284-via-clauded-tmux) (tmux).
 - [ ] `unix://` socket transport (WebSocket is "experimental and unsupported").
 
 ### Fallback
