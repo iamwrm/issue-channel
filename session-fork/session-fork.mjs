@@ -90,6 +90,12 @@ export function mirror(turns) {
   return out.join('\n');
 }
 
+const zeroNumbers = (v) =>
+  typeof v === 'number' ? 0
+    : Array.isArray(v) ? v.map(zeroNumbers)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, zeroNumbers(x)]))
+      : v;
+
 // Plan: { ops: [{ op: "replace", from, to, note } | { op: "drop", from, to }], note?, title? }
 // Turn ranges are inclusive. "replace" puts one synthetic user note (plus a short assistant
 // ack, to keep roles alternating) where the turns were. Turn 0 (preamble) can't be edited.
@@ -108,6 +114,13 @@ export function applyPlan(turns, plan, sessionId) {
   const base = turns.flatMap((t) => t.entries).find((e) => e.type === 'user');
   const out = [];
   const push = (e) => out.push({ ...e, sessionId, ...(e.session_id ? { session_id: sessionId } : {}) });
+  // Copied replies were already billed to the parent. Without a requestId and with zero usage,
+  // usage tools such as ccusage count them as 0 here and keep crediting them to the parent.
+  const pushCopy = (e) => {
+    if (e.type !== 'assistant' || !e.message?.usage) return push(e);
+    const { requestId, ...rest } = e;
+    push({ ...rest, message: { ...e.message, usage: zeroNumbers(e.message.usage) } });
+  };
   const synth = (note) => {
     const ts = new Date().toISOString();
     const common = { cwd: base.cwd, gitBranch: base.gitBranch, version: base.version, entrypoint: base.entrypoint, userType: base.userType, isSidechain: false, timestamp: ts };
@@ -120,7 +133,7 @@ export function applyPlan(turns, plan, sessionId) {
   for (const t of turns) {
     const a = action.get(t.index);
     if (!isComplete(t)) continue;
-    if (!a) t.entries.forEach(push);
+    if (!a) t.entries.forEach(pushCopy);
     else if (a.op === 'replace') synth(a.note);
     else if (a.op !== 'drop' && a.op !== 'skip') throw new Error(`unknown op ${a.op}`);
   }

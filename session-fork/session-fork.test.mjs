@@ -14,7 +14,7 @@ function makeLog() {
   const entries = [{ type: 'mode', mode: 'x', sessionId: SID }, { type: 'permission-mode', permissionMode: 'x', sessionId: SID }];
   let parent = null;
   const add = (e) => { const u = `u${++n}`; entries.push({ ...base(), ...e, uuid: u, parentUuid: parent }); parent = u; };
-  const assistant = (content) => add({ type: 'assistant', session_id: SID, message: { id: `m${n}`, type: 'message', role: 'assistant', model: 'claude-x', content } });
+  const assistant = (content) => add({ type: 'assistant', session_id: SID, requestId: `req${n}`, message: { id: `m${n}`, type: 'message', role: 'assistant', model: 'claude-x', content, usage: { input_tokens: 5, output_tokens: 7, cache_creation: { ephemeral_5m_input_tokens: 9 }, service_tier: 'standard' } } });
   add({ type: 'system', subtype: 'informational', content: 'start' });
   add({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: 'first prompt: remember 43' } });
   assistant([{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }]);
@@ -54,6 +54,20 @@ test('replace inserts a note, drops the incomplete turn, rewrites ids and re-lin
   // Each note is followed by an assistant ack, so roles keep alternating.
   const roles = out.filter((e) => e.type !== 'system').map((e) => e.type);
   assert.deepEqual(roles.slice(-4), ['user', 'assistant', 'user', 'assistant']);
+});
+
+test('copied replies carry no requestId and zero usage, so they are not billed twice', () => {
+  const src = makeLog();
+  const out = applyPlan(turnsOf(src), { ops: [] }, 'child');
+  const copied = out.filter((e) => e.type === 'assistant');
+  assert.equal(copied.length, 3); // turn 1: tool_use + reply, turn 2: reply
+  for (const e of copied) {
+    assert.equal(e.requestId, undefined);
+    assert.deepEqual(e.message.usage, { input_tokens: 0, output_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0 }, service_tier: 'standard' });
+    assert.match(e.message.id, /^m\d+$/); // ids are kept
+  }
+  // The source entries are not mutated.
+  assert.ok(src.filter((e) => e.type === 'assistant').every((e) => e.requestId && e.message.usage.output_tokens === 7));
 });
 
 test('drop removes turns without a note', () => {
