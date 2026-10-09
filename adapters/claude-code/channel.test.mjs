@@ -1,4 +1,4 @@
-// Integration tests: channel.mjs over MCP stdio against the real server (in-memory db).
+// Integration tests: the Claude Code entry (channel.mjs) over MCP stdio against the real server (in-memory db).
 // GitHub is never called: reactions are disabled and no reply/done tools are used.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { openDb, createApp } from '../server/server.mjs'
+import { openDb, createApp } from '../../server/server.mjs'
 
 const SECRET = 's'.repeat(40)
 const KEY = 'k'.repeat(40)
@@ -55,14 +55,14 @@ const registered = async issue =>
   (await api('GET', `/api/subscriptions?repo=${encodeURIComponent(REPO)}&issue=${issue}`)).subscriptions.map(s => s.session).sort()
 
 // Start channel.mjs as a Claude Code session with the given id; collects channel notifications.
-async function start(sessionId) {
+async function start(sessionId, entry = new URL('./channel.mjs', import.meta.url).pathname) {
   const client = new Client({ name: 'test', version: '0' }, { capabilities: {} })
   const got = []
   client.fallbackNotificationHandler = async n => {
     if (n.method === 'notifications/claude/channel') got.push({ at: Date.now(), ...n.params })
   }
   const transport = new StdioClientTransport({
-    command: process.execPath, args: [new URL('./channel.mjs', import.meta.url).pathname], stderr: 'ignore',
+    command: process.execPath, args: [entry], stderr: 'ignore',
     env: {
       PATH: process.env.PATH, ISSUECHAN_URL: base, ISSUECHAN_API_KEY: KEY, ISSUECHAN_STATE_DIR: stateDir,
       ISSUECHAN_ALLOWED_AUTHORS: 'me', ISSUECHAN_REACTION: '', ISSUECHAN_DONE_REACTION: '',
@@ -122,5 +122,18 @@ test('handoff resume: waits for initialized, delivers the backlog, takes the new
     assert.deepEqual(await registered(3), ['child'])
     await c.call('issue_unsubscribe', { repo: REPO, issue: 3 })
     assert.deepEqual(await registered(3), [], 'no orphaned registration is left')
+  } finally { await c.close() }
+})
+
+test('the old channel/channel.mjs path (what ~/.claude.json runs) still starts the channel', async () => {
+  const c = await start(crypto.randomUUID(), new URL('../../channel/channel.mjs', import.meta.url).pathname)
+  try {
+    const caps = c.client.getServerCapabilities()
+    assert.deepEqual(caps.experimental, { 'claude/channel': {} })
+    assert.match(c.client.getInstructions(), /^issuechan connects this session to GitHub issues\. Messages arrive as <channel source="issuechan"/)
+    await c.call('issue_subscribe', { repo: REPO, issue: 4 })
+    const cid = await comment(4, '/bot via the old path')
+    assert.ok(await until(() => c.got.length === 1), 'a /bot is delivered')
+    assert.equal(c.got[0].meta.trigger_comment, String(cid))
   } finally { await c.close() }
 })

@@ -117,19 +117,16 @@ export function lineDiff(a, b) {
   return out.join('\n')
 }
 
-// Which agent harness runs this channel, and its session id: { agent, id } or null.
-// One entry per harness; add pi / codex here once their session id env vars are known.
+// Which agent harness runs this server, and its session id: { agent, id } or null.
+// `agentEnv` comes from the harness adapter: [[agentTag, ENV_VAR], ...], e.g. [['cc', 'CLAUDE_CODE_SESSION_ID']].
 // ISSUECHAN_AGENT_ID=<agent>:<id> overrides detection (for wrappers or unknown harnesses).
-const AGENT_ENV = [
-  ['cc', 'CLAUDE_CODE_SESSION_ID'],
-]
 const AGENT_RE = /^[a-z][a-z0-9]*$/
 const ID_RE = /^[A-Za-z0-9-]+$/
 
-export function resolveAgent(env) {
+export function resolveAgent(env, agentEnv = []) {
   const o = (env.ISSUECHAN_AGENT_ID ?? '').match(/^([^:]+):(.+)$/)
   if (o && AGENT_RE.test(o[1]) && ID_RE.test(o[2])) return { agent: o[1], id: o[2] }
-  for (const [agent, key] of AGENT_ENV) {
+  for (const [agent, key] of agentEnv) {
     if (ID_RE.test(env[key] ?? '')) return { agent, id: env[key] }
   }
   return null

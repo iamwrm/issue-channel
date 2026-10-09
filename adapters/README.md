@@ -1,0 +1,17 @@
+# Harness adapters
+
+issuechan is one MCP server (`core/issuechan.mjs`) with the same tools for every agent harness: `issue_subscribe`, `issue_reply`, `issue_done`, `issue_unsubscribe`, `issue_subscriptions`. A harness differs in only three ways, and an adapter supplies just those:
+
+| | What | Claude Code (`claude-code/`) | Codex (planned, #22) |
+|---|---|---|---|
+| who | `agentEnv`: `[[agentTag, ENV_VAR]]` holding the session id (reply tag, state file name) | `cc` ← `CLAUDE_CODE_SESSION_ID` | thread id from the tool call's `_meta.threadId` |
+| how | `deliver(mcp, { content, meta })`: push one `/bot` delivery into the session | `notifications/claude/channel` | app-server `turn/start` / `turn/steer` |
+| setup | `capabilities`, `arrival` (first instructions sentence), `resumeDelayMs` | `claude/channel` capability, `<channel source="issuechan">`, 3000 ms | |
+
+The rest (polling, `/bot` parsing and routing, edit diffs, state files, replies and 👀/🚀) lives in `core/` and must stay harness-neutral.
+
+## Add a harness
+1. `adapters/<harness>/adapter.mjs`: default-export the object above.
+2. `adapters/<harness>/<entry>.mjs`: `await runIssuechan(adapter)`, and register it as the harness's MCP server.
+3. Add the adapter to `adapters/index.mjs`, so `core/reply-format.mjs` recognizes its session id.
+4. Put an integration test next to it (see `claude-code/channel.test.mjs`).

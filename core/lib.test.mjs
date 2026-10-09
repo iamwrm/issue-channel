@@ -62,12 +62,14 @@ test('replyTag: name unless default, agent:id8 when known', () => {
   assert.equal(replyTag({ name: 'default', agent: null }), '')
 })
 
-test('resolveAgent: override, then known harness env vars, else null', () => {
-  assert.deepEqual(resolveAgent({ CLAUDE_CODE_SESSION_ID: 'abc-123' }), { agent: 'cc', id: 'abc-123' })
-  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'pi:xyz9', CLAUDE_CODE_SESSION_ID: 'abc' }), { agent: 'pi', id: 'xyz9' })
-  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'bad override', CLAUDE_CODE_SESSION_ID: 'abc' }), { agent: 'cc', id: 'abc' })
-  assert.equal(resolveAgent({ CLAUDE_CODE_SESSION_ID: '../etc' }), null, 'ids go into file names, so reject odd chars')
-  assert.equal(resolveAgent({}), null)
+test('resolveAgent: override, then the adapter\'s harness env vars, else null', () => {
+  const cc = [['cc', 'CLAUDE_CODE_SESSION_ID']]
+  assert.deepEqual(resolveAgent({ CLAUDE_CODE_SESSION_ID: 'abc-123' }, cc), { agent: 'cc', id: 'abc-123' })
+  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'pi:xyz9', CLAUDE_CODE_SESSION_ID: 'abc' }, cc), { agent: 'pi', id: 'xyz9' })
+  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'bad override', CLAUDE_CODE_SESSION_ID: 'abc' }, cc), { agent: 'cc', id: 'abc' })
+  assert.equal(resolveAgent({ CLAUDE_CODE_SESSION_ID: '../etc' }, cc), null, 'ids go into file names, so reject odd chars')
+  assert.equal(resolveAgent({ CLAUDE_CODE_SESSION_ID: 'abc' }), null, 'no adapter table: only the override counts')
+  assert.equal(resolveAgent({}, cc), null)
 })
 
 test('C: edits never trigger, only new /bot comments do', () => {

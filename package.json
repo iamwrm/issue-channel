@@ -1,9 +1,9 @@
 {
-  "name": "issue-channel-claude",
+  "name": "issue-channel",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Claude Code channel (MCP stdio) that pushes /bot GitHub issue comments into a running session",
+  "description": "issuechan: MCP server that pushes /bot GitHub issue comments into a running agent session (Claude Code adapter; more harnesses in adapters/)",
   "engines": { "node": ">=24" },
   "scripts": { "test": "node --test" },
   "dependencies": { "@modelcontextprotocol/sdk": "1.32.1" }

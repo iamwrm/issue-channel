@@ -5,11 +5,11 @@ Talk to a running Claude Code session through a GitHub issue. Comment `/bot …`
 ```
 GitHub ──signed webhook──► Cloudflare tunnel ──► server (container, SQLite)
                                                     ▲ long-poll /api (API key)
-                    Claude Code ◄── stdio ── issuechan channel (MCP, spawned by Claude Code)
+                    Claude Code ◄── stdio ── issuechan (MCP: core/ + adapters/claude-code, spawned by Claude Code)
 ```
 
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
-- `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary prefixed with who wrote it (see [Reply format](#reply-format)), then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
+- `core/`: the harness-neutral issuechan MCP server (`issuechan.mjs`, pure logic in `lib.mjs`, `gh` calls in `github.mjs`). Each harness plugs in through a small adapter in `adapters/<harness>/` that says how a delivery enters the session (see [`adapters/README.md`](adapters/README.md)). Claude Code uses `adapters/claude-code/`: a [channel](https://code.claude.com/docs/en/channels-reference). `channel/channel.mjs` and `channel/reply-format.mjs` are shims for the old paths. The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary prefixed with who wrote it (see [Reply format](#reply-format)), then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
 - `session-fork/session-fork.mjs`: fork a Claude Code session log into an edited copy that `clauded --resume <id>` loads (CLM-style context editing, applied offline). `mirror` prints the session as numbered turns, `fork <session> <plan.json>` replaces or drops whole turns and adds notes, and `handoff` copies the issuechan subscription state to the fork. Used by the "replace myself" and "dispatch" prompts in `PROMPTS.md`; details in [`session-fork/README.md`](session-fork/README.md).
 - `spawn/spawn-agent.sh`: start a new agent in its own herdr tab, launched with the required `clauded` flags, and have it listen to an issue under its own session name. See [`spawn/README.md`](spawn/README.md).
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
@@ -35,11 +35,13 @@ The containers use `--restart unless-stopped`, so they come back after a reboot.
 ## Use from Claude Code
 
 ```sh
-cd channel && npm ci
-clauded mcp add -s user issuechan -- node "$PWD/channel.mjs"
+npm ci   # in projects/issue-channel
+clauded mcp add -s user issuechan -- node "$PWD/adapters/claude-code/channel.mjs"
 ```
 
-Then add [`channel/CLAUDE.snippet.md`](channel/CLAUDE.snippet.md) to `~/.claude/CLAUDE.md`. It is **required**: Claude Code labels channel messages that arrive mid-turn as external input, and without this note Claude declines to act on them. The note is safe because only signed webhooks from allowlisted authors get through.
+An older config that runs `…/channel/channel.mjs` keeps working through the shim.
+
+Then add [`adapters/claude-code/CLAUDE.snippet.md`](adapters/claude-code/CLAUDE.snippet.md) to `~/.claude/CLAUDE.md`. It is **required**: Claude Code labels channel messages that arrive mid-turn as external input, and without this note Claude declines to act on them. The note is safe because only signed webhooks from allowlisted authors get through.
 
 Start a session with the channel loaded. Custom channels need the development flag during the research preview, and it only works in interactive sessions:
 
@@ -79,9 +81,9 @@ Every reply starts with `🤖 <tag> · <summary>`, so replies from different ses
 | `extract` | none | `🤖 extract · <summary>` |
 | `default` | none | `🤖 <summary>` |
 
-The name is what `/bot <name>` targets. `<agent>:<id8>` comes from `resolveAgent()` in `channel/lib.mjs`: `ISSUECHAN_AGENT_ID=<agent>:<id>` if set, otherwise the first match in its `AGENT_ENV` table (today only `cc` ← `CLAUDE_CODE_SESSION_ID`). To support another harness (pi, codex, …), add its session id env var to that table. The same id names the saved state file (`<agent>-<id>.json`). The bot marker stays the last line, so the self-filter is unaffected.
+The name is what `/bot <name>` targets. `<agent>:<id8>` comes from `resolveAgent()` in `core/lib.mjs`: `ISSUECHAN_AGENT_ID=<agent>:<id>` if set, otherwise the first match in the adapter's `agentEnv` table (Claude Code: `cc` ← `CLAUDE_CODE_SESSION_ID`). A new harness declares its own in its adapter. The same id names the saved state file (`<agent>-<id>.json`). The bot marker stays the last line, so the self-filter is unaffected.
 
-Comments posted with `gh` directly should use the same format: `node channel/reply-format.mjs --summary "…" --body-file reply.md | gh issue comment N -R owner/name -F -`. For hand-written comments (such as a live status comment), start with the same `🤖 <tag> ·` prefix and end with the marker.
+Comments posted with `gh` directly should use the same format: `node core/reply-format.mjs --summary "…" --body-file reply.md | gh issue comment N -R owner/name -F -`. For hand-written comments (such as a live status comment), start with the same `🤖 <tag> ·` prefix and end with the marker.
 
 ## API
 
@@ -107,7 +109,5 @@ curl -s -H "Authorization: Bearer $API_KEY" https://issue-channel.example.com/ap
 ## Test
 
 ```sh
-(cd server && node --test)
-(cd channel && npm ci && npm test)
-(cd session-fork && node --test)
+npm ci && node --test   # in projects/issue-channel: server, core, adapters, session-fork
 ```
