@@ -22,10 +22,12 @@ function readEnvFile(file) {
 // Adapter contract (see adapters/README.md):
 //   name           harness name for logs
 //   agentEnv       [[agentTag, ENV_VAR]]: where the harness puts its session id (ISSUECHAN_AGENT_ID overrides)
+//   agentFromCall  optional (callParams) => { agent, id } | null: for harnesses that pass the session id
+//                  only with tool calls; the first call that yields one binds this process to it
 //   capabilities   extra MCP server capabilities (e.g. Claude Code's channel capability)
 //   arrival        first sentence of the instructions: how deliveries show up in the session
 //   resumeDelayMs  default wait after `initialized` before auto-resume may deliver
-//   deliver(mcp, { content, meta })  push one /bot delivery into the session
+//   deliver(mcp, { content, meta }, { agent })  push one /bot delivery into the session
 export async function runIssuechan(adapter) {
   const ENV_FILE = process.env.ISSUECHAN_ENV_FILE ?? path.join(os.homedir(), '.local/share/issue-channel/.env')
   const BASE_URL = (process.env.ISSUECHAN_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '')
@@ -44,7 +46,7 @@ export async function runIssuechan(adapter) {
   // The harness's session id (from adapter.agentEnv). It survives reconnects and resumes, so
   // subscriptions saved under it are restored automatically; a new session starts empty.
   // It also tags every issue_reply.
-  const AGENT = resolveAgent(process.env, adapter.agentEnv)
+  let AGENT = resolveAgent(process.env, adapter.agentEnv)
 
   const subs = new Map() // "repo#issue" -> { repo, issue, cursor, flushed, buffer, stop }
 
@@ -156,6 +158,10 @@ export async function runIssuechan(adapter) {
   mcp.setRequestHandler(CallToolRequestSchema, async req => {
     const a = req.params.arguments ?? {}
     const text = t => ({ content: [{ type: 'text', text: t }] })
+    if (!AGENT && adapter.agentFromCall) {
+      AGENT = adapter.agentFromCall(req.params)
+      if (AGENT) log(`bound to ${AGENT.agent}:${AGENT.id}`)
+    }
     try {
       if (req.params.name === 'issue_subscribe') {
         if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
@@ -288,11 +294,14 @@ export async function runIssuechan(adapter) {
       saveState()
       return
     }
-    const items = s.buffer.drain()
+    // Drain only after the adapter accepted the delivery: if it throws, the poll loop backs off and
+    // re-reads the same events, and the /bot is delivered on the next attempt instead of being lost.
+    const items = s.buffer.peek()
     await adapter.deliver(mcp, {
       content: formatDelivery({ repo: s.repo, issue: s.issue, title: s.buffer.title, trigger: trig, items }),
       meta: { repo: s.repo, issue: String(s.issue), session, trigger_comment: String(trig.comment_id), seq: String(trig.seq) },
-    })
+    }, { agent: AGENT })
+    s.buffer.drain()
     s.flushed = trig.seq
     s.open.add(trig.comment_id)
     saveState()

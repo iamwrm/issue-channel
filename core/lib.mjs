@@ -86,8 +86,13 @@ export class IssueBuffer {
     if (ev.title) this.title = ev.title
   }
 
+  // What drain() would return, without consuming it (so a failed delivery can be retried).
+  peek() {
+    return [...this.items.values()].sort((a, b) => a.seq - b.seq)
+  }
+
   drain() {
-    const items = [...this.items.values()].sort((a, b) => a.seq - b.seq)
+    const items = this.peek()
     this.items.clear()
     for (const it of items) {
       const key = it.kind === 'issue' ? 'issue' : `comment:${it.id}`

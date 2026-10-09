@@ -30,6 +30,7 @@ test('buffer collects allowed new/edited comments and triggers on /bot', () => {
   assert.equal(b.add(c(5, 13, '/bot from stranger', 'created', 'eve')), null, 'non-allowlisted /bot never triggers')
   const trig = b.add(c(6, 14, '/bot go'))
   assert.deepEqual(trig, { target: 'go', author: 'me', comment_id: 14, seq: 6 })
+  assert.deepEqual(b.peek(), b.peek(), 'peek does not consume')
   const items = b.drain()
   assert.deepEqual(items.map(i => [i.id, i.body]), [[10, 'first (edited)'], [14, '/bot go']])
   assert.equal(b.drain().length, 0)

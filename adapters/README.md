@@ -2,11 +2,11 @@
 
 issuechan is one MCP server (`core/issuechan.mjs`) with the same tools for every agent harness: `issue_subscribe`, `issue_reply`, `issue_done`, `issue_unsubscribe`, `issue_subscriptions`. A harness differs in only three ways, and an adapter supplies just those:
 
-| | What | Claude Code (`claude-code/`) | Codex (planned, #22) |
+| | What | Claude Code (`claude-code/`) | Codex (`codex/`) |
 |---|---|---|---|
-| who | `agentEnv`: `[[agentTag, ENV_VAR]]` holding the session id (reply tag, state file name) | `cc` ← `CLAUDE_CODE_SESSION_ID` | thread id from the tool call's `_meta.threadId` |
-| how | `deliver(mcp, { content, meta })`: push one `/bot` delivery into the session | `notifications/claude/channel` | app-server `turn/start` / `turn/steer` |
-| setup | `capabilities`, `arrival` (first instructions sentence), `resumeDelayMs` | `claude/channel` capability, `<channel source="issuechan">`, 3000 ms | |
+| who | `agentEnv`: `[[agentTag, ENV_VAR]]` holding the session id (reply tag, state file name), or `agentFromCall(params)` when the harness passes it only with tool calls | `cc` ← `CLAUDE_CODE_SESSION_ID` | `codex` ← the first tool call's `_meta.threadId` |
+| how | `deliver(mcp, { content, meta }, { agent })`: push one `/bot` delivery into the session; throw to have the core retry it | `notifications/claude/channel` | app-server `turn/start` / `turn/steer` |
+| setup | `capabilities`, `arrival` (first instructions sentence), `resumeDelayMs` | `claude/channel` capability, `<channel source="issuechan">`, 3000 ms | none, "arrives as a user message", 0 |
 
 The rest (polling, `/bot` parsing and routing, edit diffs, state files, replies and 👀/🚀) lives in `core/` and must stay harness-neutral.
 
