@@ -150,7 +150,7 @@ Unattended, on a throwaway issue (#23, deleted afterwards):
 | Child remembers the edited history | ✅ `/bot rmchild` asked for the codeword, and the child answered `MARIGOLD-23` / `4177` from memory |
 | Double subscribe after `--resume` + `handoff` | ✅ none. The auto-resume subscribed once, the spawn prompt got "already subscribed", and the session was renamed to `rmchild` |
 
-Bugs found (not fixed yet):
+Bugs found (fixed afterwards, see the rerun below):
 - **Delivery after unsubscribe.** canary-5 (posted 13:30:34) was delivered to the parent at 13:30:36, after `issue_unsubscribe` had returned. A long poll already in flight still delivers, because `pollLoop` doesn't check `s.stopped` before `maybeDeliver`.
 - **A delivery at child startup is dropped.** The child's auto-resume replayed canary-5 right after connecting, before "Channel notifications registered". Claude Code never showed it, yet the channel counted it as delivered: cursor 362, comment in `open_requests`. canary-5 was handled only because of the bug above, and because the child looked up its open requests by hand. Fix idea: delay the first delivery until the channel is registered, or re-deliver open requests on the first poll.
 - **Stale session registration.** The copied state carried `session: rmparent`, so the child registered on the server as `rmparent`. The later `issue_subscribe(session=rmchild)` took the "already subscribed" path, which skips the server `PUT`, so the server still listed only `rmparent`. `/bot rmchild …` still worked, because an unknown one-word target counts as untargeted, but `/bot rmparent …` would also reach the child. The child's own `issue_unsubscribe` then deleted only `rmchild`, which left an orphaned `rmparent` row that had to be removed by hand. Fix idea: on a session rename, re-register (`PUT` the new name, `DELETE` the old one).
@@ -169,7 +169,7 @@ The cost is that Claude Code reads the last reply's `usage` as a context-size hi
 - [x] `handoff` live-tested: no `/bot` lost during the switch (with two delivery bugs found, see above)
 - [x] Spawn a child with the channel loaded in herdr, child replies, `/bot <name>` routes to it ([`spawn-agent.sh`](../spawn/README.md) live test)
 - [x] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
-- [ ] Fix: delivery after unsubscribe, dropped startup delivery, stale session registration
+- [x] Fix: delivery after unsubscribe, dropped startup delivery, stale session registration (`channel/channel.test.mjs`)
 
 ## Test
 

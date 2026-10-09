@@ -30,6 +30,9 @@ const REACTION = process.env.ISSUECHAN_REACTION ?? 'eyes'
 // GitHub has no ✅ reaction, so the default is 🚀.
 const DONE_REACTION = process.env.ISSUECHAN_DONE_REACTION ?? 'rocket'
 const POLL_TIMEOUT_S = 50
+// Claude Code registers its channel listener a moment after the MCP handshake, and drops
+// notifications sent before that. Auto-resume waits this long after `initialized`.
+const RESUME_DELAY_MS = Number(process.env.ISSUECHAN_RESUME_DELAY_MS ?? 3000)
 let session = process.env.ISSUECHAN_SESSION || 'default'
 // The harness's session id (Claude Code passes CLAUDE_CODE_SESSION_ID to MCP servers). It survives
 // /mcp reconnect and --resume, so subscriptions saved under it are restored automatically; a new
@@ -151,7 +154,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
       if (a.session) {
         if (!/^[A-Za-z0-9_.-]+$/.test(a.session)) throw new Error('session must match [A-Za-z0-9_.-]+')
-        session = a.session
+        if (a.session !== session) await renameSession(a.session)
       }
       return text(await subscribe(a.repo, a.issue))
     }
@@ -184,6 +187,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     return { isError: true, content: [{ type: 'text', text: String(e.message ?? e) }] }
   }
 })
+
+// Move this session's server registrations to a new name (e.g. a forked successor that
+// inherited its parent's name through session-fork handoff), so /bot <old> no longer reaches it.
+let renamed = false
+async function renameSession(name) {
+  const old = session
+  session = name
+  renamed = true
+  if (subs.size) saveState()
+  for (const s of subs.values()) {
+    await api('PUT', '/api/subscriptions', { repo: s.repo, issue: s.issue, session }).catch(e => log(`register ${s.repo}#${s.issue}: ${e.message}`))
+    await api('DELETE', '/api/subscriptions', { repo: s.repo, issue: s.issue, session: old }).catch(e => log(`unregister ${old}: ${e.message}`))
+  }
+}
 
 async function subscribe(repo, issue) {
   const key = `${repo}#${issue}`
@@ -229,9 +246,12 @@ async function pollLoop(s) {
         since: s.cursor, timeout: POLL_TIMEOUT_S, limit: 200,
         filter: { repo: s.repo, issue: s.issue, event: ['issue_comment', 'issues'] },
       })
+      // An unsubscribe can land while this long poll is in flight: drop what it returned.
+      if (s.stopped) break
       for (const ev of events) {
         const trig = s.buffer.add(ev)
         if (trig) await maybeDeliver(s, trig)
+        if (s.stopped) break
       }
       if (!s.stopped) s.cursor = Math.max(s.cursor, next)
       backoff = 1000
@@ -249,6 +269,7 @@ async function pollLoop(s) {
 }
 
 async function maybeDeliver(s, trig) {
+  if (s.stopped) return
   let active = []
   if (trig.target && trig.target !== session) {
     const r = await api('GET', `/api/subscriptions?repo=${encodeURIComponent(s.repo)}&issue=${s.issue}`).catch(() => ({ subscriptions: [] }))
@@ -355,9 +376,10 @@ async function markDone(repo, issue, commentIds) {
   return lines.join('\n')
 }
 
+const initialized = new Promise(r => { mcp.oninitialized = r })
 await mcp.connect(new StdioServerTransport())
 log(`connected; server=${BASE_URL} session=${session} agent=${AGENT ? `${AGENT.agent}:${AGENT.id}` : '-'}`)
-autoResume()
+initialized.then(() => new Promise(r => setTimeout(r, RESUME_DELAY_MS))).then(autoResume)
 
 // Restore this agent session's subscriptions (after /mcp reconnect or --resume).
 async function autoResume() {
@@ -365,7 +387,7 @@ async function autoResume() {
   const state = loadState()
   const saved = Object.values(state.subs ?? {})
   if (!saved.length) return
-  if (state.session) session = state.session
+  if (state.session && !renamed) session = state.session // an explicit issue_subscribe(session) wins
   for (const { repo, issue } of saved) {
     for (let delay = 2000; ; delay = Math.min(delay * 2, 60000)) {
       try { log(await subscribe(repo, issue)); break } catch (e) {

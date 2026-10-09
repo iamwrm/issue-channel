@@ -57,6 +57,7 @@ Then say: *"create a new issue in iamwrm/xxx and listen to it"*. The repo needs 
 | `ISSUECHAN_ALLOWED_AUTHORS` | the repo owner |
 | `ISSUECHAN_REACTION` | `eyes`: the channel adds 👀 to each delivered `/bot` comment through the local `gh` login; set it to empty to disable |
 | `ISSUECHAN_DONE_REACTION` | `rocket`: replaces 👀 when the job is done (GitHub has no ✅ reaction); set it to empty to disable |
+| `ISSUECHAN_RESUME_DELAY_MS` | `3000`: after `--resume` or `/mcp` reconnect, how long auto-resume waits after the MCP `initialized` handshake before delivering, because Claude Code drops channel notifications that arrive before it registers its listener |
 
 ### `/bot` rules
 
