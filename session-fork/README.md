@@ -155,6 +155,16 @@ Bugs found (fixed afterwards, see the rerun below):
 - **A delivery at child startup is dropped.** The child's auto-resume replayed canary-5 right after connecting, before "Channel notifications registered". Claude Code never showed it, yet the channel counted it as delivered: cursor 362, comment in `open_requests`. canary-5 was handled only because of the bug above, and because the child looked up its open requests by hand. Fix idea: delay the first delivery until the channel is registered, or re-deliver open requests on the first poll.
 - **Stale session registration.** The copied state carried `session: rmparent`, so the child registered on the server as `rmparent`. The later `issue_subscribe(session=rmchild)` took the "already subscribed" path, which skips the server `PUT`, so the server still listed only `rmparent`. `/bot rmchild …` still worked, because an unknown one-word target counts as untargeted, but `/bot rmparent …` would also reach the child. The child's own `issue_unsubscribe` then deleted only `rmchild`, which left an orphaned `rmparent` row that had to be removed by hand. Fix idea: on a session rename, re-register (`PUT` the new name, `DELETE` the old one).
 
+### Rerun after the fixes ([`b112f2b`](https://github.com/iamwrm/mainbot/commit/b112f2b), 2026-10-09)
+
+This was the same unattended run on throwaway #25 (deleted afterwards), with 8 canaries and the codeword `LAVENDER-25` / `8821`.
+
+| Check | Result |
+|---|---|
+| Every canary handled exactly once | ✅ 1–3 by the parent and 4–8 by the child, all 🚀. canary-4 was posted 1 s before the parent unsubscribed. The parent didn't get it, and the child received it as backlog after the resume delay. That is the case that was dropped before. |
+| Child memory | ✅ answered `LAVENDER-25` / `8821` |
+| Server registration | ✅ only `rmchild` while the child was running, and nothing left after its `issue_unsubscribe` |
+
 ## Usage accounting (ccusage)
 
 Copied assistant replies lose their `requestId` and get `usage` with every number set to 0, while `message.id` is kept. So `npx ccusage` counts them as 0 for the fork and keeps crediting them to the parent, and a fork shows up only once it makes its own requests. Before this ([PR #17](https://github.com/iamwrm/mainbot/pull/17)), totals were already correct, because ccusage dedupes on `message.id` + `requestId`. But `ccusage session` credited each duplicate to whichever log it read first, so a fork took over ~881k tokens (~$0.54) of the parent's usage in the live test.
