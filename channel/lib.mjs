@@ -117,13 +117,41 @@ export function lineDiff(a, b) {
   return out.join('\n')
 }
 
-// Reply layout on the issue: a plain one-line summary, then a clickable "Full reply" toggle.
-export function formatReply({ summary, body }) {
+// Which agent harness runs this channel, and its session id: { agent, id } or null.
+// One entry per harness; add pi / codex here once their session id env vars are known.
+// ISSUECHAN_AGENT_ID=<agent>:<id> overrides detection (for wrappers or unknown harnesses).
+const AGENT_ENV = [
+  ['cc', 'CLAUDE_CODE_SESSION_ID'],
+]
+const AGENT_RE = /^[a-z][a-z0-9]*$/
+const ID_RE = /^[A-Za-z0-9-]+$/
+
+export function resolveAgent(env) {
+  const o = (env.ISSUECHAN_AGENT_ID ?? '').match(/^([^:]+):(.+)$/)
+  if (o && AGENT_RE.test(o[1]) && ID_RE.test(o[2])) return { agent: o[1], id: o[2] }
+  for (const [agent, key] of AGENT_ENV) {
+    if (ID_RE.test(env[key] ?? '')) return { agent, id: env[key] }
+  }
+  return null
+}
+
+// Who wrote a reply: "<name> · <agent>:<id8>", dropping the name when it is "default"
+// and the id when the harness gives none. "" when neither is known.
+export function replyTag({ name, agent }) {
+  const parts = []
+  if (name && name !== 'default') parts.push(name)
+  if (agent) parts.push(`${agent.agent}:${agent.id.slice(0, 8)}`)
+  return parts.join(' · ')
+}
+
+// Reply layout on the issue: "🤖 <tag> · <summary>", then a clickable "Full reply" toggle.
+export function formatReply({ summary, body, tag }) {
   const line = String(summary ?? '').replace(/\s+/g, ' ').trim()
   if (!line) throw new Error('summary is required')
   const full = String(body ?? '').trim()
   if (!full) throw new Error('body is required')
-  const esc = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const head = tag ? `🤖 ${tag} · ${line}` : `🤖 ${line}`
+  const esc = head.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${BOT_MARKER}\n`
 }
 

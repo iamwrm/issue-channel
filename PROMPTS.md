@@ -17,7 +17,7 @@ Subscribe with issuechan to the GitHub issue mentioned above, confirm it is list
 ## Live status comment
 
 ```text
-While working on the task above, post one status comment on the subscribed issue with a headline and a Step/Status/Notes table, keep editing that same comment in place with gh as each step progresses (always keeping the bot marker as the last line), and post a final summary with issue_reply when everything is done.
+While working on the task above, post one status comment on the subscribed issue with a headline and a Step/Status/Notes table, keep editing that same comment in place with gh as each step progresses (starting with the same `🤖 <tag> ·` prefix as issue_reply and always keeping the bot marker as the last line), and post a final summary with issue_reply when everything is done.
 ```
 
 ## Consolidate the conversation

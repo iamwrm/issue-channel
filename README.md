@@ -9,7 +9,7 @@ GitHub ──signed webhook──► Cloudflare tunnel ──► server (contain
 ```
 
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
-- `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary, then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
+- `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary prefixed with who wrote it (see [Reply format](#reply-format)), then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
 - `session-fork/session-fork.mjs`: fork a Claude Code session log into an edited copy that `clauded --resume <id>` loads (CLM-style context editing, applied offline). `mirror` prints the session as numbered turns, `fork <session> <plan.json>` replaces or drops whole turns and adds notes, and `handoff` copies the issuechan subscription state to the fork. Used by the "replace myself" and "dispatch" prompts in `PROMPTS.md`; details in [`session-fork/README.md`](session-fork/README.md).
 - `spawn/spawn-agent.sh`: start a new agent in its own herdr tab, launched with the required `clauded` flags, and have it listen to an issue under its own session name. See [`spawn/README.md`](spawn/README.md).
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
@@ -65,7 +65,22 @@ Then say: *"create a new issue in iamwrm/xxx and listen to it"*. The repo needs 
 - `/bot <name>` (a single token on the first line) targets a named session. If `<name>` is not an active session on that issue, the comment counts as untargeted (for example `/bot hi`).
 - Idle session: Claude starts a new turn. Busy session: the message lands after the current tool call, inside the same turn. Text Claude is already streaming is not interrupted.
 - Request lifecycle: 👀 when a `/bot` is delivered, 🚀 when the agent marks it done (`issue_reply` with `done` defaulting to true, or `issue_done`). Open requests are saved with the subscription. A deleted comment, or a 👀 that's already gone, is tolerated.
-- Subscriptions are saved per Claude Code session (`CLAUDE_CODE_SESSION_ID`, in `~/.local/state/issue-channel/`). They are restored automatically after `/mcp` reconnect or `clauded --resume`/`--continue`, from the last delivered trigger, so comments made while the channel was down are not lost. A new session starts with no subscriptions.
+- Subscriptions are saved per agent session (Claude Code: `CLAUDE_CODE_SESSION_ID`, in `~/.local/state/issue-channel/`). They are restored automatically after `/mcp` reconnect or `clauded --resume`/`--continue`, from the last delivered trigger, so comments made while the channel was down are not lost. A new session starts with no subscriptions.
+
+### Reply format
+
+Every reply starts with `🤖 <tag> · <summary>`, so replies from different sessions on the same GitHub account can be told apart:
+
+| issuechan session | agent session id | first line |
+|---|---|---|
+| `default` | Claude Code `c17a1e9d-…` | `🤖 cc:c17a1e9d · <summary>` |
+| `extract` | Claude Code `c17a1e9d-…` | `🤖 extract · cc:c17a1e9d · <summary>` |
+| `extract` | none | `🤖 extract · <summary>` |
+| `default` | none | `🤖 <summary>` |
+
+The name is what `/bot <name>` targets. `<agent>:<id8>` comes from `resolveAgent()` in `channel/lib.mjs`: `ISSUECHAN_AGENT_ID=<agent>:<id>` if set, otherwise the first match in its `AGENT_ENV` table (today only `cc` ← `CLAUDE_CODE_SESSION_ID`). To support another harness (pi, codex, …), add its session id env var to that table. The same id names the saved state file (`<agent>-<id>.json`). The bot marker stays the last line, so the self-filter is unaffected.
+
+Comments posted with `gh` directly should use the same format: `node channel/reply-format.mjs --summary "…" --body-file reply.md | gh issue comment N -R owner/name -F -`. For hand-written comments (such as a live status comment), start with the same `🤖 <tag> ·` prefix and end with the marker.
 
 ## API
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, lineDiff, BOT_MARKER } from './lib.mjs'
+import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, lineDiff, BOT_MARKER, replyTag, resolveAgent } from './lib.mjs'
 
 test('parseTrigger', () => {
   assert.deepEqual(parseTrigger('/bot'), { target: null })
@@ -45,11 +45,29 @@ test('deleted comments leave the buffer', () => {
   assert.equal(b.drain().length, 0)
 })
 
-test('formatReply: plain summary line, then a Full reply toggle, then the marker', () => {
-  const out = formatReply({ summary: 'Answer: <43>\n ok', body: 'Full **text**\n\nline 2' })
-  assert.equal(out, `Answer: &lt;43&gt; ok\n\n<details>\n<summary>Full reply</summary>\n\nFull **text**\n\nline 2\n\n</details>\n\n${BOT_MARKER}\n`)
+test('formatReply: 🤖 + tag + summary line, then a Full reply toggle, then the marker', () => {
+  const out = formatReply({ summary: 'Answer: <43>\n ok', body: 'Full **text**\n\nline 2', tag: 'extract · cc:c17a1e9d' })
+  assert.equal(out, `🤖 extract · cc:c17a1e9d · Answer: &lt;43&gt; ok\n\n<details>\n<summary>Full reply</summary>\n\nFull **text**\n\nline 2\n\n</details>\n\n${BOT_MARKER}\n`)
+  assert.ok(formatReply({ summary: 's', body: 'b' }).startsWith('🤖 s\n'), 'no tag: emoji only')
+  assert.ok(out.trimEnd().endsWith(BOT_MARKER), 'marker stays last')
   assert.throws(() => formatReply({ summary: ' ', body: 'x' }), /summary/)
   assert.throws(() => formatReply({ summary: 's', body: '' }), /body/)
+})
+
+test('replyTag: name unless default, agent:id8 when known', () => {
+  const agent = { agent: 'cc', id: 'c17a1e9d-0000-4000-8000-000000000000' }
+  assert.equal(replyTag({ name: 'default', agent }), 'cc:c17a1e9d')
+  assert.equal(replyTag({ name: 'extract', agent }), 'extract · cc:c17a1e9d')
+  assert.equal(replyTag({ name: 'extract', agent: null }), 'extract')
+  assert.equal(replyTag({ name: 'default', agent: null }), '')
+})
+
+test('resolveAgent: override, then known harness env vars, else null', () => {
+  assert.deepEqual(resolveAgent({ CLAUDE_CODE_SESSION_ID: 'abc-123' }), { agent: 'cc', id: 'abc-123' })
+  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'pi:xyz9', CLAUDE_CODE_SESSION_ID: 'abc' }), { agent: 'pi', id: 'xyz9' })
+  assert.deepEqual(resolveAgent({ ISSUECHAN_AGENT_ID: 'bad override', CLAUDE_CODE_SESSION_ID: 'abc' }), { agent: 'cc', id: 'abc' })
+  assert.equal(resolveAgent({ CLAUDE_CODE_SESSION_ID: '../etc' }), null, 'ids go into file names, so reject odd chars')
+  assert.equal(resolveAgent({}), null)
 })
 
 test('C: edits never trigger, only new /bot comments do', () => {

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { BOT_MARKER, IssueBuffer, formatDelivery, formatReply, isForSession } from './lib.mjs'
+import { BOT_MARKER, IssueBuffer, formatDelivery, formatReply, isForSession, replyTag, resolveAgent } from './lib.mjs'
 
 const log = (...a) => console.error('[issuechan]', ...a)
 
@@ -31,9 +31,10 @@ const REACTION = process.env.ISSUECHAN_REACTION ?? 'eyes'
 const DONE_REACTION = process.env.ISSUECHAN_DONE_REACTION ?? 'rocket'
 const POLL_TIMEOUT_S = 50
 let session = process.env.ISSUECHAN_SESSION || 'default'
-// Claude Code passes its session id to MCP servers. It survives /mcp reconnect and --resume,
-// so subscriptions saved under it are restored automatically; a new session starts empty.
-const CC_SESSION_ID = /^[A-Za-z0-9-]+$/.test(process.env.CLAUDE_CODE_SESSION_ID ?? '') ? process.env.CLAUDE_CODE_SESSION_ID : null
+// The harness's session id (Claude Code passes CLAUDE_CODE_SESSION_ID to MCP servers). It survives
+// /mcp reconnect and --resume, so subscriptions saved under it are restored automatically; a new
+// session starts empty. It also tags every issue_reply.
+const AGENT = resolveAgent(process.env)
 
 const subs = new Map() // "repo#issue" -> { repo, issue, cursor, flushed, buffer, stop }
 
@@ -50,7 +51,7 @@ async function api(method, p, body) {
 }
 
 function stateFile() {
-  const id = CC_SESSION_ID ? `cc-${CC_SESSION_ID}` : session.replace(/[^A-Za-z0-9_.-]/g, '_')
+  const id = AGENT ? `${AGENT.agent}-${AGENT.id}` : session.replace(/[^A-Za-z0-9_.-]/g, '_')
   return path.join(STATE_DIR, `${id}.json`)
 }
 function loadState() {
@@ -156,7 +157,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
     }
     if (req.params.name === 'issue_reply') {
       if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
-      const url = await ghComment(a.repo, a.issue, formatReply(a))
+      const url = await ghComment(a.repo, a.issue, formatReply({ ...a, tag: replyTag({ name: session, agent: AGENT }) }))
       if (a.done === false) return text(url)
       return text(`${url}\n${await markDone(a.repo, a.issue, a.comment_ids)}`)
     }
@@ -355,12 +356,12 @@ async function markDone(repo, issue, commentIds) {
 }
 
 await mcp.connect(new StdioServerTransport())
-log(`connected; server=${BASE_URL} session=${session} cc_session=${CC_SESSION_ID ?? '-'}`)
+log(`connected; server=${BASE_URL} session=${session} agent=${AGENT ? `${AGENT.agent}:${AGENT.id}` : '-'}`)
 autoResume()
 
-// Restore this Claude Code session's subscriptions (after /mcp reconnect or --resume).
+// Restore this agent session's subscriptions (after /mcp reconnect or --resume).
 async function autoResume() {
-  if (!CC_SESSION_ID) return
+  if (!AGENT) return
   const state = loadState()
   const saved = Object.values(state.subs ?? {})
   if (!saved.length) return

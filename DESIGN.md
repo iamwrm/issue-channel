@@ -76,7 +76,7 @@ Neither mechanism interrupts a running tool or a streaming reply. A message land
 ## Decisions
 
 - **Self-filter:** the agent's replies include a hidden marker (`<!-- issue-channel:bot -->`). Marked comments never trigger `/bot`, even when the bot posts as the user's own account.
-- **Replies:** the agent posts replies through the local `gh` login (now via the channel's `issue_reply` tool, which adds the marker). The server stays read-only toward GitHub and needs no GitHub token.
+- **Replies:** the agent posts replies through the local `gh` login (now via the channel's `issue_reply` tool, which adds the marker and a `🤖 <session> · <agent>:<id8>` prefix naming the session that wrote it). The server stays read-only toward GitHub and needs no GitHub token.
 - **Query:** a structured JSON filter (repo, issue, event/action, author, title/body contains/LIKE/regex). No raw SQL.
 - **Retention:** keep all events forever, and prune by hand if that is ever needed. This also keeps deleted comments recoverable from `events.db`.
 - Later decisions (reactions, reply format, auto-resubscribe, edit/delete handling) are documented as current behavior in the README's `/bot` rules.
