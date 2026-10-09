@@ -26,6 +26,18 @@ While working on the task above, post one status comment on the subscribed issue
 Rewrite the whole subscribed issue conversation into as few self-contained comments as you judge best, in whatever structure fits the content, keeping every decision, result, link and still-open request, post them with issue_reply, then delete all the older comments they replace, both mine and yours.
 ```
 
+## Replace myself with an edited-context successor
+
+```text
+Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node projects/issue-channel/session-fork/session-fork.mjs mirror $CLAUDE_CODE_SESSION_ID`, write a plan that replaces or drops the turns that are no longer needed and ends with a handoff note, fork it, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork in a new herdr pane with `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan --resume <fork id>` (answer its startup dialogs), and tell me on the issue once it is listening.
+```
+
+## Dispatch to another issue
+
+```text
+Dispatch the task above to a worker agent: create a new issue in iamwrm/mainbot for it, fork your session with `projects/issue-channel/session-fork/session-fork.mjs` keeping only the turns the worker needs plus a note describing the task, start the fork in a new herdr pane with `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan --resume <fork id>` (answer its startup dialogs), ask it to subscribe to the new issue under its own session name and do the task there, and give me the issue link.
+```
+
 ## Wrap up
 
 ```text

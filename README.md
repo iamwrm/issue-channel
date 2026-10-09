@@ -10,6 +10,7 @@ GitHub ──signed webhook──► Cloudflare tunnel ──► server (contain
 
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
 - `channel/`: the Claude Code [channel](https://code.claude.com/docs/en/channels-reference). The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary, then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
+- `session-fork/session-fork.mjs`: fork a Claude Code session log into an edited copy that `clauded --resume <id>` loads (CLM-style context editing, applied offline). `mirror` prints the session as numbered turns, `fork <session> <plan.json>` replaces or drops whole turns and adds notes, and `handoff` copies the issuechan subscription state to the fork. Used by the "replace myself" and "dispatch" prompts in `PROMPTS.md`; see [#14](https://github.com/iamwrm/mainbot/issues/14).
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
 
 ## Deploy (this host)
@@ -91,4 +92,5 @@ curl -s -H "Authorization: Bearer $API_KEY" https://issue-channel.example.com/ap
 ```sh
 (cd server && node --test)
 (cd channel && npm ci && npm test)
+(cd session-fork && node --test)
 ```
