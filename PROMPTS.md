@@ -20,6 +20,12 @@ Subscribe with issuechan to the GitHub issue mentioned above, confirm it is list
 While working on the task above, post one status comment on the subscribed issue with a headline and a Step/Status/Notes table, keep editing that same comment in place with gh as each step progresses (always keeping the bot marker as the last line), and post a final summary with issue_reply when everything is done.
 ```
 
+## Consolidate the conversation
+
+```text
+Rewrite the whole subscribed issue conversation into as few self-contained comments as you judge best, in whatever structure fits the content, keeping every decision, result, link and still-open request, post them with issue_reply, then delete all the older comments they replace, both mine and yours.
+```
+
 ## Wrap up
 
 ```text
