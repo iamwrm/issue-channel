@@ -48,4 +48,4 @@ On a throwaway issue (#18, now closed):
 
 Re-tested after the switch to tabs (2026-10-09, throwaway #21, now closed): `--name tabtest` opened its own tab (`w2:tH`) and left the caller's tab with the same pane count. The listening reply was posted in **25 s**, and the tab was closed after the test.
 
-Not tested yet: `--resume` together with a `session-fork handoff`. The child would auto-resubscribe from the copied state and then also get the subscribe prompt.
+`--resume` together with a `session-fork handoff` was live-tested on 2026-10-09. There was no double subscribe, but the child stays registered on the server under the parent's session name. See [the session-fork live test](../session-fork/README.md#live-test-full-replace-myself-run-with-handoff-2026-10-09).

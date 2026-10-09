@@ -137,6 +137,24 @@ Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. I
 | IDs of the two consolidated #12 comments | only in a **dropped** turn | ✅ "not in my context", no guessing |
 | How many turns it sees | — | ✅ describes exactly the edited chain |
 
+## Live test: full replace-myself run with handoff (2026-10-09)
+
+Unattended, on a throwaway issue (#23, deleted afterwards):
+1. `spawn-agent.sh --name rmparent` started the parent, which was given a codeword (`MARIGOLD-23`) and a number (`4177`).
+2. A script posted an untargeted `/bot canary-N` every ~15 s, 12 in all, from before the switch until after it.
+3. The parent got the PROMPTS.md "Replace myself" prompt, with the successor name `rmchild`. It ran `mirror` and `fork` (~53k → ~0.6k tokens, with the codeword kept in the note), then `handoff`, then `issue_unsubscribe` (13:30:29), then `spawn-agent.sh --resume`. The child connected at 13:30:38 and posted its listening reply at 13:31:11.
+
+| Check | Result |
+|---|---|
+| Every canary handled | ✅ all 12 were handled exactly once and all show 🚀: 1–5 by the parent, 6–12 by the child (checked against both session logs) |
+| Child remembers the edited history | ✅ `/bot rmchild` asked for the codeword, and the child answered `MARIGOLD-23` / `4177` from memory |
+| Double subscribe after `--resume` + `handoff` | ✅ none. The auto-resume subscribed once, the spawn prompt got "already subscribed", and the session was renamed to `rmchild` |
+
+Bugs found (not fixed yet):
+- **Delivery after unsubscribe.** canary-5 (posted 13:30:34) was delivered to the parent at 13:30:36, after `issue_unsubscribe` had returned. A long poll already in flight still delivers, because `pollLoop` doesn't check `s.stopped` before `maybeDeliver`.
+- **A delivery at child startup is dropped.** The child's auto-resume replayed canary-5 right after connecting, before "Channel notifications registered". Claude Code never showed it, yet the channel counted it as delivered: cursor 362, comment in `open_requests`. canary-5 was handled only because of the bug above, and because the child looked up its open requests by hand. Fix idea: delay the first delivery until the channel is registered, or re-deliver open requests on the first poll.
+- **Stale session registration.** The copied state carried `session: rmparent`, so the child registered on the server as `rmparent`. The later `issue_subscribe(session=rmchild)` took the "already subscribed" path, which skips the server `PUT`, so the server still listed only `rmparent`. `/bot rmchild …` still worked, because an unknown one-word target counts as untargeted, but `/bot rmparent …` would also reach the child. Fix idea: on a session rename, re-register (`PUT` the new name, `DELETE` the old one).
+
 ## Usage accounting (ccusage)
 
 Copied assistant replies lose their `requestId` and get `usage` with every number set to 0, while `message.id` is kept. So `npx ccusage` counts them as 0 for the fork and keeps crediting them to the parent, and a fork shows up only once it makes its own requests. Before this ([PR #17](https://github.com/iamwrm/mainbot/pull/17)), totals were already correct, because ccusage dedupes on `message.id` + `requestId`. But `ccusage session` credited each duplicate to whichever log it read first, so a fork took over ~881k tokens (~$0.54) of the parent's usage in the live test.
@@ -148,9 +166,10 @@ The cost is that Claude Code reads the last reply's `usage` as a context-size hi
 - [x] `mirror` / `fork` / `handoff` with unit tests (`node --test`)
 - [x] Edited fork resumes in a herdr pane and remembers exactly the edited history
 - [x] "Replace myself" and "dispatch" prompts in PROMPTS.md
-- [ ] `handoff` live-tested: no `/bot` lost during the switch
+- [x] `handoff` live-tested: no `/bot` lost during the switch (with two delivery bugs found, see above)
 - [x] Spawn a child with the channel loaded in herdr, child replies, `/bot <name>` routes to it ([`spawn-agent.sh`](../spawn/README.md) live test)
-- [ ] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
+- [x] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
+- [ ] Fix: delivery after unsubscribe, dropped startup delivery, stale session registration
 
 ## Test
 
