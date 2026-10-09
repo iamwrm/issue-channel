@@ -30,7 +30,7 @@ Follow-up to [#9](https://github.com/iamwrm/mainbot/issues/9). Add Codex support
 - [ ] `unix://` socket transport (WebSocket is "experimental and unsupported").
 
 ### Fallback
-Extend `stop_hook_poller` with an issue-channel provider: a Stop hook long-poll for idle waits, plus an async `PostToolUse` hook for mid-turn steering. This is weaker. Idle waiting is bounded by the hook timeout, and the hooks need `/hooks` trust or `--dangerously-bypass-hook-trust`.
+A Codex hook-based provider: a Stop hook that long-polls the issue-channel server for idle waits, plus an async `PostToolUse` hook for mid-turn steering. This is weaker. Idle waiting is bounded by the hook timeout, and the hooks need `/hooks` trust or `--dangerously-bypass-hook-trust`.
 
 Refs: https://learn.chatgpt.com/docs/app-server · https://learn.chatgpt.com/docs/hooks
 
