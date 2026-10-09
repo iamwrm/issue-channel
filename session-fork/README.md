@@ -85,7 +85,7 @@ user: <first 400 chars of the prompt>
 tools: Bash×3, Read×1, mcp__issuechan__issue_reply×2
 assistant: <first 400 chars of the final reply>
 ```
-Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs until the next one. `incomplete` marks a turn with an unanswered `tool_use`.
+Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs until the next one. `incomplete` marks a turn with an unanswered `tool_use`. `running` marks the last turn when the log is your own session (`$CLAUDE_CODE_SESSION_ID`): that turn is the one running `mirror` and `fork`.
 
 **Plan:**
 ```json
@@ -104,7 +104,7 @@ Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs
 
 **What `fork` guarantees**
 - A new uuid, with `sessionId` (and `session_id`) rewritten. `parentUuid` is re-linked in order, which bridges every cut.
-- Only whole turns are edited, so `tool_use`/`tool_result` pairs never break. Incomplete turns, such as the one running the fork, are always dropped.
+- Only whole turns are edited, so `tool_use`/`tool_result` pairs never break. Incomplete and running turns are always dropped. When you fork your own session, the turn running the fork can look complete, because its earlier tool calls already have results and the `fork` call isn't logged yet. So the tool treats the last turn of your own session as running and drops it.
 - Metadata that points into the old log (`last-prompt`, `file-history-*`, `queue-operation`) is not copied.
 - The source log is never modified.
 
@@ -180,6 +180,7 @@ The cost is that Claude Code reads the last reply's `usage` as a context-size hi
 - [x] Spawn a child with the channel loaded in herdr, child replies, `/bot <name>` routes to it ([`spawn-agent.sh`](../spawn/README.md) live test)
 - [x] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
 - [x] Fix: delivery after unsubscribe, dropped startup delivery, stale session registration (`channel/channel.test.mjs`)
+- [x] Fix: forking your own session always drops the running turn. Before, the #14 replace run had to drop it by hand, because the turn looked complete.
 
 ## Test
 

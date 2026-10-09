@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readLog, mainChain, splitTurns, mirror, applyPlan, fork, handoff } from './session-fork.mjs';
+import { readLog, mainChain, splitTurns, mirror, applyPlan, fork, handoff, isOwnSession, loadTurns } from './session-fork.mjs';
 
 const SID = 'parent-session';
 let n = 0;
@@ -102,6 +102,42 @@ test('fork writes a new resumable log next to the source and leaves the source u
   const ids = new Set(out.map((e) => e.uuid));
   assert.ok(out.filter((e) => e.parentUuid).every((e) => ids.has(e.parentUuid)));
   assert.equal(mainChain(out).length, r.entries);
+});
+
+// Forking your own live session: the running turn's earlier tool calls already have results,
+// and the call running the fork isn't logged yet, so the turn looks complete.
+function makeLiveLog() {
+  const entries = makeLog();
+  const leaf = entries.findLast((e) => e.uuid).uuid;
+  entries.push({ ...base(), type: 'user', uuid: `u${++n}`, parentUuid: leaf, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't9', content: 'mirror output' }] } });
+  return entries;
+}
+
+test('the last turn of your own session counts as running and is always dropped', () => {
+  assert.ok(isOwnSession(`/p/${SID}.jsonl`, SID));
+  assert.ok(!isOwnSession('/p/other.jsonl', SID));
+  assert.ok(!isOwnSession(`/p/${SID}.jsonl`, undefined));
+
+  const dir = mkdtempSync(join(tmpdir(), 'session-fork-live-'));
+  const src = join(dir, `${SID}.jsonl`);
+  writeFileSync(src, makeLiveLog().map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+  // Someone else's session: the answered last turn is complete and kept.
+  assert.match(mirror(loadTurns(src, { live: false })), /\[\[TURN 3 from=human tokens~\d+\]\]/);
+  assert.ok(JSON.stringify(readLog(fork(src, { ops: [] }, { live: false }).dest)).includes('third prompt'));
+
+  // Your own session, detected from CLAUDE_CODE_SESSION_ID: the last turn is running and dropped.
+  const saved = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = SID;
+  try {
+    assert.match(mirror(loadTurns(src)), /\[\[TURN 3 from=human tokens~\d+ running\]\]/);
+    const out = JSON.stringify(readLog(fork(src, { ops: [], note: 'handoff' }).dest));
+    assert.ok(!out.includes('third prompt'));
+    assert.ok(out.includes('second reply') && out.includes('handoff'));
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = saved;
+  }
 });
 
 test('handoff copies issuechan state to the child session', () => {

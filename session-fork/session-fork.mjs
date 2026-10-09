@@ -54,8 +54,20 @@ const text = (content) =>
 const clip = (s, n) => (s.length > n ? `${s.slice(0, n)}…` : s).replace(/\s+/g, ' ').trim();
 const approxTokens = (entries) => Math.round(entries.reduce((n, e) => n + JSON.stringify(e.message ?? e.attachment ?? '').length, 0) / 4);
 
-// A turn is complete when every tool_use has a matching tool_result.
+// An agent that forks its own live session is still inside its last turn. That turn can look
+// complete: its earlier tool calls have results, and the call running the fork isn't logged yet.
+export const isOwnSession = (path, self = process.env.CLAUDE_CODE_SESSION_ID) =>
+  Boolean(self) && path.endsWith(`/${self}.jsonl`);
+
+export function loadTurns(path, { live = isOwnSession(path) } = {}) {
+  const turns = splitTurns(mainChain(readLog(path)));
+  if (live && turns.length > 1) turns.at(-1).running = true;
+  return turns;
+}
+
+// A turn is complete when every tool_use has a matching tool_result and it isn't still running.
 function isComplete(turn) {
+  if (turn.running) return false;
   const uses = new Set(), results = new Set();
   for (const e of turn.entries) {
     for (const c of Array.isArray(e.message?.content) ? e.message.content : []) {
@@ -80,7 +92,8 @@ export function mirror(turns) {
         if (c.type === 'text') reply = c.text;
       }
     }
-    out.push(`[[TURN ${t.index} from=${from} tokens~${approxTokens(t.entries)}${isComplete(t) ? '' : ' incomplete'}]]`);
+    const flag = t.running ? ' running' : isComplete(t) ? '' : ' incomplete';
+    out.push(`[[TURN ${t.index} from=${from} tokens~${approxTokens(t.entries)}${flag}]]`);
     if (first) out.push(`user: ${clip(text(first.message.content), 400)}`);
     const toolList = Object.entries(tools).map(([k, v]) => `${k}×${v}`).join(', ');
     if (toolList) out.push(`tools: ${toolList}`);
@@ -99,7 +112,7 @@ const zeroNumbers = (v) =>
 // Plan: { ops: [{ op: "replace", from, to, note } | { op: "drop", from, to }], note?, title? }
 // Turn ranges are inclusive. "replace" puts one synthetic user note (plus a short assistant
 // ack, to keep roles alternating) where the turns were. Turn 0 (preamble) can't be edited.
-// Incomplete turns (an unanswered tool_use, e.g. the turn running the fork) are always dropped.
+// Incomplete turns (an unanswered tool_use, or the running last turn of your own session) are always dropped.
 // A top-level "note" is appended as the last message, e.g. a handoff for the successor.
 export function applyPlan(turns, plan, sessionId) {
   const action = new Map();
@@ -143,9 +156,9 @@ export function applyPlan(turns, plan, sessionId) {
   return out;
 }
 
-export function fork(srcPath, plan) {
+export function fork(srcPath, plan, opts) {
   const entries = readLog(srcPath);
-  const turns = splitTurns(mainChain(entries));
+  const turns = loadTurns(srcPath, opts);
   const id = randomUUID();
   const chain = applyPlan(turns, plan, id);
   const meta = entries.filter((e) => KEEP_META.has(e.type)).slice(0, KEEP_META.size).map((e) => ({ ...e, sessionId: id }));
@@ -168,7 +181,7 @@ export function handoff(fromId, toId, stateDir = STATE) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const [cmd, a, b] = process.argv.slice(2);
   try {
-    if (cmd === 'mirror') process.stdout.write(mirror(splitTurns(mainChain(readLog(findLog(a))))));
+    if (cmd === 'mirror') process.stdout.write(mirror(loadTurns(findLog(a))));
     else if (cmd === 'fork') console.log(JSON.stringify(fork(findLog(a), JSON.parse(readFileSync(b, 'utf8'))), null, 2));
     else if (cmd === 'handoff') console.log(handoff(a, b));
     else {
