@@ -112,10 +112,10 @@ Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs
 
 ## Spawning the child
 
-- Channels only register in **interactive** sessions, because `-p` ignores `--dangerously-load-development-channels`. Start the child as `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan --resume <id>` in a new herdr pane (`herdr pane split … --no-focus`, then `herdr pane run`).
-- At startup it shows the dev-channel confirmation, plus the trust-folder dialog for a new directory. The spawner answers them after reading the pane (`herdr pane read`, `herdr agent send-keys`).
+Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. It starts the fork in a new herdr pane with the only allowed launch command (`clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`), answers the startup dialogs, names the agent, has it subscribe under that session name, and checks its "listening" reply.
+
 - A fork has a new `CLAUDE_CODE_SESSION_ID`, so it starts with **no** subscriptions unless `handoff` copied them.
-- With several agents on one issue, give each a session name (`issue_subscribe({session})`) so that `/bot <name>` reaches the right one.
+- With several agents on one issue, each needs its own session name, so that `/bot <name>` reaches the right one.
 
 ## Decisions
 
@@ -149,7 +149,8 @@ The cost is that Claude Code reads the last reply's `usage` as a context-size hi
 - [x] Edited fork resumes in a herdr pane and remembers exactly the edited history
 - [x] "Replace myself" and "dispatch" prompts in PROMPTS.md
 - [ ] `handoff` live-tested: no `/bot` lost during the switch
-- [ ] Full live run: the parent spawns a child with the channel loaded, the child replies on the issue, `/bot <name>` routes correctly, and the parent unsubscribes
+- [x] Spawn a child with the channel loaded in herdr, child replies, `/bot <name>` routes to it ([`spawn-agent.sh`](../spawn/README.md) live test)
+- [ ] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
 
 ## Test
 
