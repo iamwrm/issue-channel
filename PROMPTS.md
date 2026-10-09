@@ -22,6 +22,8 @@ While working on the task above, post one status comment on the subscribed issue
 
 ## Consolidate the conversation
 
+Version: `v20261009.1`
+
 ```text
 Consolidate the whole subscribed issue, its description and every comment, by calling the GitHub API with gh: first save the current issue and all its comments to a local JSON backup, then rewrite the description as the current state (goal, source-of-truth links, decisions, open checklist), post the rest (results and history that don't belong in the description) as few self-contained comments as you judge best, in the open rather than collapsed, starting with the same `🤖 <tag> ·` prefix as issue_reply and ending with the bot marker line, without repeating anything between description and comments, keeping every decision, result, link and still-open request, then delete all the older comments they replace, both mine and yours, including this request, and mark it done with issue_done.
 ```
