@@ -112,7 +112,7 @@ Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs
 
 ## Spawning the child
 
-Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. It starts the fork in a new herdr pane with the only allowed launch command (`clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`), answers the startup dialogs, names the agent, has it subscribe under that session name, and checks its "listening" reply.
+Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. It starts the fork in a new herdr tab with the only allowed launch command (`clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`), answers the startup dialogs, names the agent, has it subscribe under that session name, and checks its "listening" reply.
 
 - A fork has a new `CLAUDE_CODE_SESSION_ID`, so it starts with **no** subscriptions unless `handoff` copied them.
 - With several agents on one issue, each needs its own session name, so that `/bot <name>` reaches the right one.

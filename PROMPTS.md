@@ -29,7 +29,7 @@ Rewrite the whole subscribed issue conversation into as few self-contained comme
 ## Launch a new agent on a new issue
 
 ```text
-Create a new issue in iamwrm/mainbot for the topic above, start a fresh agent listening to it with `projects/issue-channel/spawn/spawn-agent.sh` under a short session name you pick, and give me the issue link and the pane id.
+Create a new issue in iamwrm/mainbot for the topic above, start a fresh agent listening to it with `projects/issue-channel/spawn/spawn-agent.sh` under a short session name you pick, and give me the issue link and the tab id.
 ```
 
 ## Replace myself with an edited-context successor
