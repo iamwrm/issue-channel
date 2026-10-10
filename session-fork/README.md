@@ -71,8 +71,10 @@ The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Replace
 ## Usage
 
 ```sh
-node session-fork.mjs mirror  <session-id|path>              # numbered turns
-node session-fork.mjs fork    <session-id|path> <plan.json>  # prints {id, dest, entries, tokens, before}
+node session-fork.mjs mirror  <session-id|path>                             # numbered turns (an index)
+node session-fork.mjs mirror  --full <session-id|path> [--out live.md]      # the editable live context
+node session-fork.mjs fork    <session-id|path> <live.md> [--keep-last] [--title T]   # applies an edited live context
+node session-fork.mjs fork    <session-id|path> <plan.json>                 # turn-level plan (dispatch)
 node session-fork.mjs handoff <from-session-id> <to-session-id>
 ```
 
@@ -87,7 +89,36 @@ assistant: <first 400 chars of the final reply>
 ```
 Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs until the next one. `incomplete` marks a turn with an unanswered `tool_use`. `running` marks the last turn when the log is your own session (`$CLAUDE_CODE_SESSION_ID`): that turn is the one running `mirror` and `fork`.
 
-**Plan:**
+**`mirror --full`** is the CLM view: the whole context as a file the model edits. Use it for compaction; `restart-agent.sh --fork` accepts nothing else.
+```
+[[LIVE_CONTEXT session=<id> digest=<16 hex> self=1 blocks=212 tokens~48120]]
+How to edit (this preamble is ignored): …
+[[TURN 3]] (+3 attachments ~207 tokens: kept while this turn keeps a block)
+[[BLOCK b0041 kind=prompt tokens~23]]
+<full prompt text>
+[[BLOCK b0042 kind=tool_use name=Bash tokens~20]]
+Bash {"command":"…"}
+[[BLOCK b0043 kind=tool_result for=b0042 tokens~8213]]
+<full tool output>
+[[BLOCK b0044 kind=thinking keep-or-delete tokens~200]]
+(reasoning, kept as signed by the API: 772 bytes)
+[[BLOCK b0045 kind=text tokens~52]]
+<full reply>
+[[END]]
+```
+The model edits it with ordinary tools: delete a block, rewrite or shorten its text, add `[[NOTE]]` + text anywhere. `fork <id> live.md` then:
+- checks `session` and `digest` (the uuids of the mirrored entries): a file made before the session moved on is refused as stale. `self=1` means the mirror was made from inside the session, so the running turn (the one doing the edit) is left out; `restart-agent.sh` drops it from the fork as well;
+- copies unchanged blocks byte for byte (signatures, ids), and writes edited text into the same entry. An edited `tool_result` gets `[trimmed when the context was edited: A → B chars]`;
+- refuses an edit to a `keep-or-delete` block (thinking), an unknown or duplicate block id, a renamed tool or invalid tool input JSON;
+- keeps tool pairs valid: deleting a `tool_use` drops its result (reported as an orphan); deleting only the result leaves a stub "(output removed when the context was edited)";
+- keeps a turn's attachments (reminders, tool lists, prompt snapshots; not shown in the mirror) while the turn keeps any block, and drops them with the turn otherwise (Claude Code announces them again);
+- puts each note, as a plain user entry, exactly where it was written;
+- warns when a turn keeps its prompt but loses every reply, or the other way round, and reports a **handoff** when no original block was kept;
+- writes `live.diff.md` next to the file: counts, tokens before → after, and each change by block range.
+
+Reasoning text is never rendered, not even when the log has it (interactive sessions do, `-p` sessions don't): the mirror is read back by the model, and a thinking block's signature, not its text, is what the API uses (POC E3: an edited text was accepted and ignored).
+
+**Plan** (turn-level, for dispatching a worker; compaction uses the live context above):
 ```json
 {
   "title": "successor of mainbot #12",
@@ -121,7 +152,7 @@ Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. I
 
 - **Fork and resume, not live editing.** Claude Code can't swap context mid-session, so the edited context becomes a new session. That is also how a successor or worker is spawned.
 - **pi-clm's idea, not pi-clm itself.** We don't run a Pi worker. The idea (context as a file the model edits) is used to build a Claude Code successor's history.
-- **Whole turns plus free-text notes.** pi-clm lets the model rewrite any block. Rebuilding Claude Code's JSONL from free text risks breaking tool pairs and metadata, so v1 only touches whole turns. Trimming large tool outputs inside a kept turn could come later.
+- **Blocks, not turns (since 2026-10-10).** v1 only touched whole turns, and in practice agents replaced every turn with one handoff note. The live context gives the model its full context, block by block, and the edit happens in the old session, which still has everything (including its signed reasoning). The tool keeps the JSONL valid: unchanged blocks are copied byte for byte, edits go into the same entries, tool pairs are repaired, and reasoning is keep-or-delete only.
 
 ## Live test (2026-10-09)
 
@@ -181,9 +212,31 @@ The cost is that Claude Code reads the last reply's `usage` as a context-size hi
 - [x] Full replace-myself run: fork + `handoff` + parent unsubscribes + `spawn-agent.sh --resume`
 - [x] Fix: delivery after unsubscribe, dropped startup delivery, stale session registration (`channel/channel.test.mjs`)
 - [x] Fix: forking your own session always drops the running turn. Before, the #14 replace run had to drop it by hand, because the turn looked complete.
+- [x] Block-level live context (`mirror --full`, `fork <live.md>`, edit-diff), POC E1–E9 and live L1
+- [ ] An agent editing a mirror of its own session, live (see the classifier note above)
 
 ## Test
 
 ```sh
 node --test
 ```
+
+## POC and live test: block-level edits (2026-10-10, Claude Code 2.1.284, Opus 5.5, `clauded`)
+
+Hand-edited forks of `clauded -p` test sessions, resumed with `clauded -p --resume`:
+
+| # | Edit | Result |
+|---|---|---|
+| E1 | none | ✅ all facts |
+| E2 | tool output and a reply rewritten | ✅ edits seen; the model checks them against kept blocks (the prompt beat the edited reply) → trim marker added |
+| E3 | thinking text rewritten, signature kept | ✅ accepted, the rewrite had no effect → keep-or-delete only |
+| E4 | prompt deleted, replies kept | ✅ "can't see the first message" → warning |
+| E5 | tool_use deleted, result kept | ✅ Claude Code dropped the orphan silently → dropped explicitly and reported |
+| E6 | note between tool_use and tool_result | ✅ seen → notes go where written |
+| E7 / E9 | thinking dropped / reply after it dropped | ✅ |
+| E8 | everything deleted + one note | ✅ facts kept, flagged as "only as the note reports it" |
+| D1–D2 | signed reasoning dropped, then asked about it | "cannot see" |
+| M | `mirror --full` → scripted edit → `fork` → resume | ✅ trimmed output + marker and the note seen; a kept prompt with its reply deleted read as an unanswered request → warning |
+| L1 | interactive `clauded` in herdr: secret turn dropped, `seq 1 400` output trimmed, a note; `restart-agent.sh --fork` | ✅ 9 s; codeword and number kept, secret unknown (absent from the fork's log), "400" from the trimmed output, both notes seen |
+
+Not done: an agent editing a mirror of **its own** session. In `-p`, the request to mirror itself was stopped by a Claude Code safety classifier before any tool ran; it was not retried. Reasoning text is never rendered since.

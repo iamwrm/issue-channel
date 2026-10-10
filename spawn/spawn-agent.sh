@@ -58,8 +58,10 @@ while :; do
     break
   elif grep -q 'I am using this for local development' <<<"$s"; then
     herdr pane send-keys "$pane" enter >/dev/null # option 1 is preselected
+  elif grep -q '❯ No, exit' <<<"$s"; then
+    herdr pane send-keys "$pane" down >/dev/null # Claude Code 2.1.284 preselects "No, exit" in a new folder
   elif grep -qE 'Yes, I trust this folder|trust the files in this folder' <<<"$s"; then
-    herdr pane send-keys "$pane" enter >/dev/null # "Yes, I trust this folder" is preselected
+    herdr pane send-keys "$pane" enter >/dev/null # "Yes, I trust this folder" is selected
   elif grep -q 'Enter to confirm' <<<"$s"; then
     die "unknown startup dialog in pane $pane, answer it by hand:"$'\n'"$s"
   fi

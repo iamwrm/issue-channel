@@ -7,7 +7,7 @@ import { isMain } from '../core/entrypoint.mjs'
 import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 
 const PROJECTS = join(homedir(), '.claude', 'projects');
 const STATE = join(homedir(), '.local', 'state', 'issue-channel');
@@ -157,6 +157,244 @@ export function applyPlan(turns, plan, sessionId) {
   return out;
 }
 
+// ---- Live context: the full session as an editable file (CLM's LIVE_CONTEXT, for Claude Code) ----
+// `mirror --full` renders every content block of every complete turn as [[BLOCK id kind=…]] + its text.
+// The agent edits that file in its OLD session (it still has the whole context and its reasoning),
+// then `fork` applies the edited file. Rules, from POC runs against Claude Code 2.1.284 / Opus 5.5:
+// - thinking is opaque: its signature is the real content (a rewritten text is accepted and ignored),
+//   so it can be kept or deleted, never edited. Its text is never rendered.
+// - an orphaned tool_result is dropped by Claude Code anyway; here it is dropped explicitly and
+//   reported. Deleting a tool_use takes its result with it; deleting only a result leaves a stub.
+// - an edited tool output gets a visible trim marker, so the model doesn't take it for a contradiction.
+// - notes are plain user entries placed exactly where written (consecutive user messages merge).
+// - attachments follow their turn: kept while it keeps any block, dropped with it otherwise.
+const MARK = /^\[\[(LIVE_CONTEXT|TURN|BLOCK|NOTE|END)\b([^\]]*)\]\]/;
+const escapeLine = (l) => (/^\\*\[\[/.test(l) ? `\\${l}` : l);
+const unescapeLine = (l) => (/^\\+\[\[/.test(l) ? l.slice(1) : l);
+const trimNl = (s) => s.replace(/\n+$/, '');
+const tok = (s) => Math.round(s.length / 4);
+const STUB = '(output removed when the context was edited)';
+
+const partText = (c) =>
+  typeof c === 'string' ? c
+    : (c || []).map((p) => (p.type === 'text' ? p.text : `[${p.type}]`)).join('\n');
+
+// One block per content item (Claude Code logs one item per entry; arrays are handled anyway).
+function blocksOf(entry, turnStart) {
+  const m = entry.message;
+  // Attachments and system entries (reminders, tool lists, prompt snapshots) are not blocks:
+  // they stay while their turn keeps any block and go with it otherwise (Claude Code re-announces them).
+  if (!m) return [];
+  if (typeof m.content === 'string') return [{ kind: turnStart ? 'prompt' : 'user', k: -1, text: m.content }];
+  return m.content.map((c, k) => {
+    if (c.type === 'text') return { kind: turnStart ? 'prompt' : entry.type === 'assistant' ? 'text' : 'user', k, text: c.text };
+    // Never render reasoning text: the mirror is read back by the model, and raw reasoning stays private.
+    if (c.type === 'thinking') return { kind: 'thinking', k, opaque: true, text: `(reasoning, kept as signed by the API: ${c.signature?.length ?? 0} bytes)` };
+    if (c.type === 'redacted_thinking') return { kind: 'thinking', k, opaque: true, text: `(redacted reasoning, ${c.data?.length ?? 0} bytes)` };
+    if (c.type === 'tool_use') return { kind: 'tool_use', k, id: c.id, name: c.name, text: `${c.name} ${JSON.stringify(c.input)}` };
+    if (c.type === 'tool_result') return { kind: 'tool_result', k, for: c.tool_use_id, text: partText(c.content) };
+    return { kind: c.type, k, opaque: true, text: clip(JSON.stringify(c), 300) };
+  });
+}
+
+// Blocks of the editable turns: complete and not running (the running turn is the one editing).
+export function liveBlocks(turns) {
+  const blocks = [], skipped = [], uuids = [];
+  let n = 0;
+  for (const t of turns) {
+    if (!isComplete(t)) { skipped.push(t); continue; }
+    for (const e of t.entries) {
+      uuids.push(e.uuid);
+      for (const b of blocksOf(e, isTurnStart(e))) blocks.push({ ...b, bid: `b${String(++n).padStart(4, '0')}`, turn: t.index, uuid: e.uuid });
+    }
+  }
+  const digest = createHash('sha256').update(uuids.join('\n')).digest('hex').slice(0, 16);
+  return { blocks, skipped, digest };
+}
+
+const HOWTO = `How to edit (this preamble is ignored):
+- Delete a whole [[BLOCK …]] (header and text) to drop it; edit its text to shorten or rewrite it.
+- kind=thinking (and other keep-or-delete blocks) can only be kept or deleted; their signature, not the text, is what the model sees.
+- Attachments (reminders, tool lists) are not shown; they stay while their turn keeps any block.
+- kind=tool_use: keep "<name> <json input>"; deleting it also drops its tool_result.
+- Add a note anywhere with a line [[NOTE]] followed by its text; prefer turn boundaries.
+- Deleting everything and leaving one [[NOTE]] is a plain handoff; it is allowed, and reported as such.
+- Lines starting with [[ inside a text are escaped with a leading backslash.
+`;
+
+export function renderLive(turns, sessionId) {
+  const { blocks, skipped, digest } = liveBlocks(turns);
+  const self = turns.some((t) => t.running) ? 1 : 0; // made from inside the session: its running turn is left out
+  const out = [`[[LIVE_CONTEXT session=${sessionId} digest=${digest} self=${self} blocks=${blocks.length} tokens~${tok(blocks.map((b) => b.text).join(''))}]]`, HOWTO];
+  let turn = -1;
+  for (const b of blocks) {
+    if (b.turn !== turn) {
+      turn = b.turn;
+      const att = turns[turn].entries.filter((e) => !e.message);
+      out.push(`[[TURN ${turn}]]${att.length ? ` (+${att.length} attachments ~${approxTokens(att)} tokens: kept while this turn keeps a block)` : ''}`);
+    }
+    const attrs = [`kind=${b.kind}`, b.name && `name=${b.name}`, b.for && `for=${blocks.find((x) => x.id === b.for)?.bid ?? b.for}`, b.opaque && 'keep-or-delete', `tokens~${tok(b.text)}`];
+    out.push(`[[BLOCK ${b.bid} ${attrs.filter(Boolean).join(' ')}]]`, ...b.text.split('\n').map(escapeLine), '');
+  }
+  for (const t of skipped) out.push(`[[TURN ${t.index}]] (${t.running ? 'running: the turn doing this edit' : 'incomplete'}; always dropped)`);
+  out.push('[[END]]', '');
+  return out.join('\n');
+}
+
+export function parseLive(src) {
+  const lines = src.split('\n');
+  const head = lines[0].match(/^\[\[LIVE_CONTEXT session=(\S+) digest=(\S+)/);
+  if (!head) throw new Error('not a live-context file (first line must be [[LIVE_CONTEXT …]]; make one with mirror --full)');
+  const items = [];
+  let cur = null;
+  for (const line of lines.slice(1)) {
+    const m = line.match(MARK);
+    if (m) {
+      cur = null;
+      if (m[1] === 'BLOCK') items.push(cur = { type: 'block', bid: m[2].trim().split(/\s+/)[0], lines: [] });
+      else if (m[1] === 'NOTE') items.push(cur = { type: 'note', lines: [] });
+      if (m[1] === 'END') break;
+    } else if (cur) cur.lines.push(unescapeLine(line));
+  }
+  for (const it of items) it.text = trimNl(it.lines.join('\n'));
+  return { session: head[1], digest: head[2], items };
+}
+
+// Apply an edited live-context file. Returns the new chain plus a report of every change.
+export function applyLive(turns, live, sessionId, { source, keepLast = false } = {}) {
+  const { blocks, digest } = liveBlocks(turns);
+  if (source && live.session !== source) throw new Error(`live-context is for session ${live.session}, not ${source}`);
+  if (live.digest !== digest) throw new Error('live-context is stale: the session changed after mirror --full; make a new one');
+  const byBid = new Map(blocks.map((b) => [b.bid, b]));
+  const kept = new Map(), notesAfter = new Map(), warnings = [];
+  let prev = null;
+  for (const it of live.items) {
+    if (it.type === 'note') { if (!notesAfter.has(prev)) notesAfter.set(prev, []); notesAfter.get(prev).push(it.text); continue; }
+    const b = byBid.get(it.bid);
+    if (!b) throw new Error(`unknown block ${it.bid}`);
+    if (kept.has(it.bid)) throw new Error(`block ${it.bid} appears twice`);
+    const edited = it.text !== trimNl(b.text);
+    if (edited && b.opaque) throw new Error(`block ${it.bid} (${b.kind}) can only be kept or deleted, not edited`);
+    if (edited && b.kind === 'tool_use') {
+      const sp = it.text.indexOf(' ');
+      if (it.text.slice(0, sp) !== b.name) throw new Error(`block ${it.bid}: keep the tool name ${b.name}`);
+      try { JSON.parse(it.text.slice(sp + 1)); } catch { throw new Error(`block ${it.bid}: the tool input is not valid JSON`); }
+    }
+    kept.set(it.bid, { text: it.text, edited });
+    prev = it.bid;
+  }
+  const keptUses = new Set(blocks.filter((b) => b.kind === 'tool_use' && kept.has(b.bid)).map((b) => b.id));
+  const report = { blocks: blocks.length, kept: 0, edited: 0, dropped: 0, orphans: 0, stubs: 0, structural: 0, notes: live.items.filter((i) => i.type === 'note').length, warnings, changes: [] };
+  for (const t of new Set(blocks.map((b) => b.turn))) {
+    const tb = blocks.filter((b) => b.turn === t);
+    const prompt = tb.find((b) => b.kind === 'prompt');
+    if (prompt && !kept.has(prompt.bid) && tb.some((b) => kept.has(b.bid)))
+      warnings.push(`turn ${t}: prompt ${prompt.bid} deleted but replies kept; the model will notice the gap`);
+    if (prompt && kept.has(prompt.bid) && !tb.some((b) => b !== prompt && kept.has(b.bid)))
+      warnings.push(`turn ${t}: prompt ${prompt.bid} kept but every reply deleted; the model will think it never answered (delete both, or add a NOTE)`);
+  }
+
+  const base = turns.flatMap((t) => t.entries).find((e) => e.type === 'user');
+  const out = [];
+  const push = (e) => out.push({ ...e, sessionId, ...(e.session_id ? { session_id: sessionId } : {}) });
+  const pushCopy = (e) => {
+    if (e.type !== 'assistant' || !e.message?.usage) return push(e);
+    const { requestId, ...rest } = e;
+    push({ ...rest, message: { ...e.message, usage: zeroNumbers(e.message.usage) } });
+  };
+  const note = (text) => push({
+    cwd: base.cwd, gitBranch: base.gitBranch, version: base.version, entrypoint: base.entrypoint, userType: base.userType,
+    isSidechain: false, timestamp: new Date().toISOString(), type: 'user', uuid: randomUUID(),
+    message: { role: 'user', content: `[Context note written while editing this session's history]\n\n${text}` },
+  });
+  (notesAfter.get(null) || []).forEach(note);
+  const blocksByUuid = Map.groupBy(blocks, (b) => b.uuid);
+  for (const t of turns) {
+    if (!isComplete(t)) {
+      if (keepLast && t.running && isComplete({ ...t, running: false })) t.entries.forEach(pushCopy);
+      continue;
+    }
+    const keepsAny = t.index === 0 || blocks.some((b) => b.turn === t.index && kept.has(b.bid));
+    for (const e of t.entries) {
+      const eb = blocksByUuid.get(e.uuid) || [];
+      if (!eb.length) { if (keepsAny) pushCopy(e); else report.structural++; continue; }
+      const content = Array.isArray(e.message?.content) ? [] : null;
+      let str = typeof e.message?.content === 'string' ? e.message.content : null, any = false;
+      for (const b of eb) {
+        const kb = kept.get(b.bid);
+        const orig = Array.isArray(e.message?.content) ? e.message.content[b.k] : null;
+        if (b.kind === 'tool_result' && !keptUses.has(b.for)) {
+          if (kb) { report.orphans++; report.changes.push([b.bid, 'orphan dropped', tok(b.text), 0]); }
+          else { report.dropped++; report.changes.push([b.bid, 'dropped', tok(b.text), 0]); }
+          continue;
+        }
+        if (!kb) {
+          if (b.kind === 'tool_result') {
+            report.stubs++; report.changes.push([b.bid, 'stubbed', tok(b.text), tok(STUB)]);
+            content.push({ ...orig, content: STUB }); any = true;
+          } else { report.dropped++; report.changes.push([b.bid, 'dropped', tok(b.text), 0]); }
+          continue;
+        }
+        any = true; report.kept++;
+        if (!kb.edited) { if (content) content.push(orig); continue; }
+        report.edited++;
+        let text = kb.text;
+        if (b.kind === 'tool_result') text = `${text}\n[trimmed when the context was edited: ${b.text.length} → ${kb.text.length} chars]`;
+        report.changes.push([b.bid, 'edited', tok(b.text), tok(text)]);
+        if (str !== null) str = text;
+        else if (b.kind === 'tool_use') content.push({ ...orig, input: JSON.parse(text.slice(text.indexOf(' ') + 1)) });
+        else if (b.kind === 'tool_result') content.push({ ...orig, content: text });
+        else content.push({ ...orig, text });
+      }
+      if (any) pushCopy({ ...e, message: { ...e.message, content: str ?? content } });
+      for (const b of eb) (notesAfter.get(b.bid) || []).forEach(note);
+    }
+  }
+  out.forEach((e, i) => { e.parentUuid = i ? out[i - 1].uuid : null; delete e.logicalParentUuid; });
+  report.handoff = !kept.size;
+  return { chain: out, report };
+}
+
+export function diffReport(r, before, after) {
+  const lines = [
+    `# Context edit`, '',
+    `| Blocks | Kept | Edited | Dropped | Stubbed | Orphans dropped | Notes | Attachments dropped | Tokens |`,
+    `|---|---|---|---|---|---|---|---|---|`,
+    `| ${r.blocks} | ${r.kept} | ${r.edited} | ${r.dropped} | ${r.stubs} | ${r.orphans} | ${r.notes} | ${r.structural} | ~${before} → ~${after} |`, '',
+  ];
+  if (r.handoff) lines.push('**Handoff:** no original block was kept; the new session starts from notes only.', '');
+  for (const w of r.warnings) lines.push(`- warning: ${w}`);
+  if (r.warnings.length) lines.push('');
+  // Collapse runs of the same change into ranges.
+  const runs = [];
+  for (const [bid, what, a, b] of r.changes) {
+    const last = runs.at(-1);
+    if (last && last.what === what && what !== 'edited' && +bid.slice(1) === +last.to.slice(1) + 1) { last.to = bid; last.a += a; last.n++; }
+    else runs.push({ from: bid, to: bid, what, a, b, n: 1 });
+  }
+  if (runs.length) lines.push('| Blocks | Change | Tokens |', '|---|---|---|');
+  for (const x of runs) lines.push(`| ${x.from === x.to ? x.from : `${x.from}–${x.to} (${x.n})`} | ${x.what} | ${x.what === 'edited' || x.what === 'stubbed' ? `~${x.a} → ~${x.b}` : `−${x.a}`} |`);
+  return lines.join('\n') + '\n';
+}
+
+export function forkLive(srcPath, liveFile, { keepLast = false, title, ...opts } = {}) {
+  const entries = readLog(srcPath);
+  const turns = loadTurns(srcPath, opts);
+  const id = randomUUID();
+  const source = entries.find((e) => e.sessionId)?.sessionId;
+  const live = parseLive(readFileSync(liveFile, 'utf8'));
+  const { chain, report } = applyLive(turns, live, id, { source, keepLast });
+  const meta = entries.filter((e) => KEEP_META.has(e.type)).slice(0, KEEP_META.size).map((e) => ({ ...e, sessionId: id }));
+  const titleEntry = { type: 'ai-title', aiTitle: title || `fork of ${source?.slice(0, 8)}`, sessionId: id };
+  const dest = join(dirname(srcPath), `${id}.jsonl`);
+  writeFileSync(dest, [...meta, ...chain, titleEntry].map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+  const before = approxTokens(turns.flatMap((t) => t.entries)), tokens = approxTokens(chain);
+  const diff = liveFile.replace(/(\.md)?$/, '.diff.md');
+  writeFileSync(diff, diffReport(report, before, tokens), { mode: 0o600 });
+  const { changes, ...counts } = report;
+  return { id, dest, entries: chain.length, tokens, before, diff, ...counts };
+}
+
 export function fork(srcPath, plan, opts) {
   const entries = readLog(srcPath);
   const turns = loadTurns(srcPath, opts);
@@ -180,15 +418,26 @@ export function handoff(fromId, toId, stateDir = STATE) {
 }
 
 if (isMain(import.meta.url)) {
-  const [cmd, a, b] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const flag = (f) => { const i = args.indexOf(f); return i < 0 ? false : (args.splice(i, 1), true); };
+  const opt = (f) => { const i = args.indexOf(f); return i < 0 ? undefined : args.splice(i, 2)[1]; };
+  const full = flag('--full'), keepLast = flag('--keep-last'), out = opt('--out'), title = opt('--title');
+  const [cmd, a, b] = args;
+  const USAGE = `usage: session-fork.mjs mirror <session-id|path>                  numbered turns (an index)
+       session-fork.mjs mirror --full <session-id|path> [--out F]   the editable live context
+       session-fork.mjs fork <session-id|path> <live-context.md> [--keep-last] [--title T]
+       session-fork.mjs fork <session-id|path> <plan.json>          turn-level plan (dispatch)
+       session-fork.mjs handoff <from-session-id> <to-session-id>`;
   try {
-    if (cmd === 'mirror') process.stdout.write(mirror(loadTurns(findLog(a))));
-    else if (cmd === 'fork') console.log(JSON.stringify(fork(findLog(a), JSON.parse(readFileSync(b, 'utf8'))), null, 2));
+    if (cmd === 'mirror' && full) {
+      const path = findLog(a);
+      const text = renderLive(loadTurns(path), readLog(path).find((e) => e.sessionId)?.sessionId);
+      if (out) { writeFileSync(out, text, { mode: 0o600 }); console.log(out); } else process.stdout.write(text);
+    } else if (cmd === 'mirror') process.stdout.write(mirror(loadTurns(findLog(a))));
+    else if (cmd === 'fork' && b && readFileSync(b, 'utf8').startsWith('[[LIVE_CONTEXT')) console.log(JSON.stringify(forkLive(findLog(a), b, { keepLast, title }), null, 2));
+    else if (cmd === 'fork' && b) console.log(JSON.stringify(fork(findLog(a), JSON.parse(readFileSync(b, 'utf8'))), null, 2));
     else if (cmd === 'handoff') console.log(handoff(a, b));
-    else {
-      console.error('usage: session-fork.mjs mirror <session-id|path>\n       session-fork.mjs fork <session-id|path> <plan.json>\n       session-fork.mjs handoff <from-session-id> <to-session-id>');
-      process.exit(2);
-    }
+    else { console.error(USAGE); process.exit(2); }
   } catch (err) {
     console.error(`session-fork: ${err.message}`);
     process.exit(1);

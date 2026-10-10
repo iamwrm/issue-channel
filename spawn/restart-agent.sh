@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Restart a Claude Code agent IN PLACE (same herdr pane), optionally into a CLM-compacted fork of its session.
 #
-#   restart-agent.sh --pane <pane> --session <id> [--fork <plan.json> [--keep-last]] [--then <prompt>]
+#   restart-agent.sh --pane <pane> --session <id> [--fork <live-context.md> [--keep-last]] [--then <prompt>]
 #                    [--name <herdr name>] [--wait-idle <s>]
 #
 #   plain:   /exit, then `$ISSUECHAN_LAUNCHER … --resume <id>` in the same pane: same session, same context,
 #            the channel restarts with the current code and resumes its subscriptions.
-#   --fork:  session-fork `fork <id> <plan.json>` + `handoff <id> <fork>` first, then resume the FORK in the same
-#            pane: the edited (smaller) context continues there, with the subscriptions, cursors and open requests.
+#   --fork:  the agent first runs `session-fork mirror --full` on its own session and EDITS that file (CLM: it
+#            still has its whole context when it decides). Only such an edited live-context file is accepted.
+#            session-fork `fork <id> <file>` + `handoff <id> <fork>` run first, then the FORK resumes in the same
+#            pane: the edited context continues there, with the subscriptions, cursors and open requests.
+#            A stale file (the session moved on since the mirror) is refused. The edit report is <file>.diff.md.
 #            The parent's issuechan state is moved aside (cc-<id>.json.handed-off) so it can't double-listen.
-#            The session's LAST turn is always dropped: it's the turn that ran `mirror` and wrote the plan, and the
-#            mirror output quotes the very turns the plan drops (seen live: a dropped secret survived that way).
+#            The session's LAST turn is always dropped: it's the turn that ran `mirror` and did the edit, and the
+#            mirror output quotes the very blocks the edit drops (seen live: a dropped secret survived that way).
 #            --keep-last keeps it.
 #   --then:  prompt sent to the agent once it's back (it knows nothing about the restart otherwise).
 #
@@ -43,7 +46,9 @@ ROOT="$(dirname "$HERE")"
 launcher=${ISSUECHAN_LAUNCHER:-claude}
 STATE_DIR=${ISSUECHAN_STATE_DIR:-$HOME/.local/state/issue-channel}
 [[ -n $pane && $sid =~ ^[0-9a-f-]{36}$ ]] || die "--pane and --session <uuid> are required"
-[[ -z $plan || -f $plan ]] || die "--fork: no such plan file: $plan"
+[[ -z $plan || -f $plan ]] || die "--fork: no such file: $plan"
+[[ -z $plan ]] || [[ $(head -c 15 "$plan") == '[[LIVE_CONTEXT ' ]] \
+  || die "--fork needs an edited live-context file from 'session-fork.mjs mirror --full' (a plan.json is not accepted)"
 for bin in herdr jq node "$launcher"; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
 started=$SECONDS
 
@@ -58,12 +63,15 @@ log "agent idle"
 # 2. Compact: fork the session log by the plan, and hand the issuechan state to the fork.
 target=$sid
 if [[ -n $plan ]]; then
-  # session-fork drops the last turn of "your own session" as running; claim the session's id for that.
-  self=$sid; [[ -n $keep_last ]] && self=''
-  out=$(CLAUDE_CODE_SESSION_ID=$self node "$ROOT/session-fork/session-fork.mjs" fork "$sid" "$plan") || die "session-fork fork failed: $out"
+  # A mirror the agent made of itself (self=1) left out its running turn, the one doing the edit: claim the
+  # session's id so session-fork drops that turn too. A mirror made from outside (self=0) covers every turn.
+  self=''; [[ $(head -1 "$plan") == *' self=1 '* ]] && self=$sid
+  out=$(CLAUDE_CODE_SESSION_ID=$self node "$ROOT/session-fork/session-fork.mjs" fork "$sid" "$plan" ${keep_last:+--keep-last} ${name:+--title "$name"} 2>&1) \
+    || die "session-fork fork failed: $out"
   target=$(jq -r .id <<<"$out")
   [[ $target =~ ^[0-9a-f-]{36}$ ]] || die "session-fork fork printed no id: $out"
-  log "forked $sid -> $target ($(jq -r '"\(.before) -> \(.tokens) tokens, \(.entries) entries"' <<<"$out"))"
+  log "forked $sid -> $target ($(jq -r '"\(.before) -> \(.tokens) tokens, \(.entries) entries; blocks kept \(.kept)/\(.blocks), edited \(.edited), dropped \(.dropped), notes \(.notes)\(if .handoff then ", HANDOFF ONLY" else "" end); \(.diff)"' <<<"$out"))"
+  jq -r '.warnings[]? | "warning: " + .' <<<"$out" | while read -r w; do log "$w"; done
   if [[ -f $STATE_DIR/cc-$sid.json ]]; then
     node "$ROOT/session-fork/session-fork.mjs" handoff "$sid" "$target" >/dev/null || die "handoff failed"
     mv "$STATE_DIR/cc-$sid.json" "$STATE_DIR/cc-$sid.json.handed-off"
@@ -84,6 +92,7 @@ ready=''
 for i in $(seq 1 45); do
   s=$(herdr pane read "$pane" --source visible --lines 60 2>/dev/null)
   if grep -q 'I am using this for local development' <<<"$s"; then herdr pane send-keys "$pane" enter >/dev/null
+  elif grep -q '❯ No, exit' <<<"$s"; then herdr pane send-keys "$pane" down >/dev/null # preselected in a new folder
   elif grep -qE 'Yes, I trust this folder|trust the files in this folder' <<<"$s"; then herdr pane send-keys "$pane" enter >/dev/null
   elif grep -q 'bypass permissions on' <<<"$s" && ! grep -q 'Enter to confirm' <<<"$s"; then ready=1; break
   elif grep -q 'Enter to confirm' <<<"$s"; then die "unknown startup dialog in $pane, answer it by hand"
@@ -109,6 +118,6 @@ log "resumed $target (channel pid ${pid:-?})"
 # 6. Tell the agent what happened and what to do next.
 [[ -n $then ]] && herdr agent prompt "$pane" "$then" >/dev/null
 
-jq -nc --arg pane "$pane" --arg from "$sid" --arg session "$target" --argjson forked "$([[ -n $plan ]] && echo true || echo false)" \
+jq -nc --arg pane "$pane" --arg from "$sid" --arg session "$target" --argjson forked "$([[ -n $plan ]] && echo true || echo false)" --argjson edit "$([[ -n $plan ]] && jq -c '{kept, blocks, edited, dropped, notes, handoff, diff}' <<<"$out" || echo null)" \
   --arg pid "${pid:-}" --argjson seconds $((SECONDS - started)) \
-  '{pane: $pane, from: $from, session: $session, forked: $forked, channel_pid: $pid, seconds: $seconds}'
+  '{pane: $pane, from: $from, session: $session, forked: $forked, edit: $edit, channel_pid: $pid, seconds: $seconds}'

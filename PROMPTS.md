@@ -37,7 +37,7 @@ Create a new issue in <owner/repo> for the topic above, start a fresh agent list
 ## Replace myself with an edited-context successor
 
 ```text
-Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror $CLAUDE_CODE_SESSION_ID`, write a plan that replaces or drops the turns that are no longer needed and ends with a handoff note, fork it, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork with `$ISSUECHAN_DIR/spawn/spawn-agent.sh --resume <fork id>`, and tell me on the issue once it is listening.
+Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror --full $CLAUDE_CODE_SESSION_ID --out live.md`, edit live.md (keep what the successor needs, trim or drop the rest block by block, end with a `[[NOTE]]` handoff), fork it with `fork $CLAUDE_CODE_SESSION_ID live.md`, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork with `$ISSUECHAN_DIR/spawn/spawn-agent.sh --resume <fork id>`, and tell me on the issue once it is listening.
 ```
 
 ## Dispatch to another issue
