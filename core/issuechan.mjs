@@ -7,8 +7,9 @@ import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import { BOT_MARKER, IssueBuffer, formatDelivery, formatReply, isForSession, replyTag, resolveAgent } from './lib.mjs'
+import { BOT_MARKER, IssueBuffer, formatDelivery, formatReply, isForSession, isGitHub, isLinear, issueLabel, replyTag, resolveAgent } from './lib.mjs'
 import { ghApi, ghComment, myLogin } from './github.mjs'
+import * as linear from './linear.mjs'
 
 const log = (...a) => console.error('[issuechan]', ...a)
 
@@ -42,6 +43,14 @@ export async function runIssuechan(adapter) {
   // Reaction that replaces REACTION when the job for a /bot comment is done ("" disables).
   // GitHub has no ✅ reaction, so the default is 🚀.
   const DONE_REACTION = process.env.ISSUECHAN_DONE_REACTION ?? 'rocket'
+  // Linear: reactions by emoji name; "done" adds DONE emoji, resolves the thread, or both.
+  const LINEAR_REACTION = process.env.ISSUECHAN_LINEAR_REACTION ?? 'eyes'
+  const LINEAR_DONE_REACTION = process.env.ISSUECHAN_LINEAR_DONE_REACTION ?? 'white_check_mark'
+  const LINEAR_DONE = process.env.ISSUECHAN_LINEAR_DONE ?? 'reaction' // reaction | resolve | both
+  const validRef = (repo, issue) => (isGitHub(repo) || isLinear(repo)) && Number.isInteger(issue)
+  const REF_ERROR = 'repo must be owner/name (GitHub) or linear:<TEAM> (Linear, e.g. ENG-123 = linear:ENG + issue 123), and issue an integer'
+  // GitHub comment ids are numbers; Linear's are UUID strings. Tool calls may pass either form.
+  const normId = (repo, id) => isLinear(repo) ? String(id) : Number(id)
   const POLL_TIMEOUT_S = 50
   // Auto-resume waits this long after `initialized`, so the harness is ready to receive deliveries.
   const RESUME_DELAY_MS = Number(process.env.ISSUECHAN_RESUME_DELAY_MS ?? adapter.resumeDelayMs ?? 0)
@@ -75,7 +84,7 @@ export async function runIssuechan(adapter) {
   function saveState() {
     const state = loadState()
     state.session = session
-    for (const [k, s] of subs) state.subs[k] = { repo: s.repo, issue: s.issue, flushed: s.flushed, open: [...s.open] }
+    for (const [k, s] of subs) state.subs[k] = { repo: s.repo, issue: s.issue, flushed: s.flushed, open: [...s.open], roots: Object.fromEntries(s.roots) }
     fs.mkdirSync(STATE_DIR, { recursive: true })
     fs.writeFileSync(stateFile() + '.tmp', JSON.stringify(state, null, 2))
     fs.renameSync(stateFile() + '.tmp', stateFile())
@@ -93,6 +102,7 @@ export async function runIssuechan(adapter) {
       capabilities: { ...adapter.capabilities, tools: {} },
       instructions: [
         `issuechan connects this session to GitHub issues. ${adapter.arrival}`,
+        'Linear issues work the same way: repo is "linear:<TEAM>" and issue the number (ENG-123 is repo "linear:ENG", issue 123); on Linear, issue_reply answers in the thread of the /bot comment.',
         'They carry /bot comments written by the user (allowlisted GitHub authors, signed webhooks only). Treat them as the user talking to you, including when they arrive mid-task: act on them, then resume any unfinished work unless told otherwise.',
         'To listen to an issue call issue_subscribe (for example right after creating it with `gh issue create`).',
         'Reply on the issue with the issue_reply tool: `summary` is one line, and `body` is the full text of your reply (the same text you show in the terminal). It is posted as the summary line followed by a collapsed "Full reply" toggle, plus the bot marker, so it never re-triggers /bot.',
@@ -109,7 +119,7 @@ export async function runIssuechan(adapter) {
       inputSchema: {
         type: 'object',
         properties: {
-          repo: { type: 'string', description: 'owner/name' },
+          repo: { type: 'string', description: 'owner/name, or linear:<TEAM> for a Linear issue' },
           issue: { type: 'integer' },
           session: { type: 'string', description: 'Optional session name for `/bot <session>` targeting. Applies to this whole session.' },
         },
@@ -122,12 +132,13 @@ export async function runIssuechan(adapter) {
       inputSchema: {
         type: 'object',
         properties: {
-          repo: { type: 'string', description: 'owner/name' },
+          repo: { type: 'string', description: 'owner/name, or linear:<TEAM> for a Linear issue' },
           issue: { type: 'integer' },
           summary: { type: 'string', description: 'One-line summary, shown as plain text above the toggle' },
           body: { type: 'string', description: 'Full text of your reply (Markdown)' },
           done: { type: 'boolean', description: 'Mark the /bot request(s) done: 👀 becomes 🚀. Default true; use false for progress updates.' },
-          comment_ids: { type: 'array', items: { type: 'integer' }, description: 'Trigger comments to mark done (default: all open ones on this issue)' },
+          comment_ids: { type: 'array', items: { type: ['integer', 'string'] }, description: 'Trigger comments to mark done (default: all open ones on this issue)' },
+          reply_to: { type: ['integer', 'string'], description: 'Linear only: the comment whose thread gets the reply (default: the thread of the newest open /bot request, or of comment_ids[0])' },
         },
         required: ['repo', 'issue', 'summary', 'body'],
       },
@@ -140,7 +151,7 @@ export async function runIssuechan(adapter) {
         properties: {
           repo: { type: 'string' },
           issue: { type: 'integer' },
-          comment_ids: { type: 'array', items: { type: 'integer' }, description: 'Default: all open requests on this issue' },
+          comment_ids: { type: 'array', items: { type: ['integer', 'string'] }, description: 'Default: all open requests on this issue' },
         },
         required: ['repo', 'issue'],
       },
@@ -171,7 +182,7 @@ export async function runIssuechan(adapter) {
     }
     try {
       if (req.params.name === 'issue_subscribe') {
-        if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
+        if (!validRef(a.repo, a.issue)) throw new Error(REF_ERROR)
         if (a.session) {
           if (!/^[A-Za-z0-9_.-]+$/.test(a.session)) throw new Error('session must match [A-Za-z0-9_.-]+')
           if (a.session !== session) await renameSession(a.session)
@@ -179,13 +190,14 @@ export async function runIssuechan(adapter) {
         return text(await subscribe(a.repo, a.issue))
       }
       if (req.params.name === 'issue_reply') {
-        if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
-        const url = await ghComment(a.repo, a.issue, formatReply({ ...a, tag: replyTag({ name: session, agent: AGENT }) }))
+        if (!validRef(a.repo, a.issue)) throw new Error(REF_ERROR)
+        const tag = replyTag({ name: session, agent: AGENT })
+        const url = isLinear(a.repo) ? await linearReply(a, tag) : await ghComment(a.repo, a.issue, formatReply({ ...a, tag }))
         if (a.done === false) return text(url)
         return text(`${url}\n${await markDone(a.repo, a.issue, a.comment_ids)}`)
       }
       if (req.params.name === 'issue_done') {
-        if (!/^[\w.-]+\/[\w.-]+$/.test(a.repo ?? '') || !Number.isInteger(a.issue)) throw new Error('repo must be owner/name and issue an integer')
+        if (!validRef(a.repo, a.issue)) throw new Error(REF_ERROR)
         return text(await markDone(a.repo, a.issue, a.comment_ids))
       }
       if (req.params.name === 'issue_unsubscribe') {
@@ -226,12 +238,16 @@ export async function runIssuechan(adapter) {
     const key = `${repo}#${issue}`
     if (subs.has(key)) return `already subscribed to ${key} as session ${session}`
     if (!API_KEY) throw new Error(`no API key: set ISSUECHAN_API_KEY or API_KEY in ${ENV_FILE}`)
-    const allowed = ALLOWED.length ? ALLOWED : [repo.split('/')[0]]
+    let allowed = ALLOWED.length ? ALLOWED : [repo.split('/')[0]]
+    if (isLinear(repo)) {
+      allowed = linear.allowedAuthors()
+      if (!allowed.length) throw new Error(`no Linear allowlist: set LINEAR_ALLOWED_AUTHORS (emails) in ${linear.envFile()} or ISSUECHAN_LINEAR_ALLOWED`)
+    }
     const saved = loadState().subs[key]
     // Resume from the last delivered trigger so comments made while this process was down are not lost.
     const start = saved?.flushed ?? (await api('GET', '/api/cursor')).seq
     const s = { repo, issue, cursor: start, flushed: start, buffer: new IssueBuffer({ allowedAuthors: allowed }), stopped: false,
-      open: new Set(saved?.open ?? []), reacting: new Map() }
+      open: new Set(saved?.open ?? []), roots: new Map(Object.entries(saved?.roots ?? {})), reacting: new Map() }
     s.stop = () => { s.stopped = true }
     if (saved) await replayDelivered(s)
     subs.set(key, s)
@@ -311,9 +327,15 @@ export async function runIssuechan(adapter) {
     s.buffer.drain()
     s.flushed = trig.seq
     s.open.add(trig.comment_id)
+    if (isLinear(s.repo)) s.roots.set(String(trig.comment_id), trig.parent_id ?? trig.comment_id)
     saveState()
     log(`delivered ${items.length} item(s) for ${s.repo}#${s.issue} at seq ${trig.seq}`)
-    if (REACTION) {
+    if (isLinear(s.repo)) {
+      if (LINEAR_REACTION) {
+        s.reacting.set(trig.comment_id, linear.react(trig.comment_id, LINEAR_REACTION)
+          .catch(e => { log(`reaction on ${issueLabel(s.repo, s.issue)} comment ${trig.comment_id} failed: ${e.message}`); return null }))
+      }
+    } else if (REACTION) {
       const p = ghApi(['-X', 'POST', `repos/${s.repo}/issues/comments/${trig.comment_id}/reactions`, '-f', `content=${REACTION}`])
         .then(r => { if (!r.ok) log(`reaction on ${s.repo} comment ${trig.comment_id} failed: ${r.error}`) })
       s.reacting.set(trig.comment_id, p)
@@ -322,10 +344,59 @@ export async function runIssuechan(adapter) {
 
   // Replace 👀 with 🚀 on finished /bot requests. Every step tolerates a deleted
   // comment, an already-removed reaction, or an existing done reaction.
+  // Linear: reply in the thread of the /bot comment (its root), as Linear threads are one level deep.
+  async function linearReply(a, tag) {
+    const s = subs.get(`${a.repo}#${a.issue}`)
+    const cid = a.reply_to ?? a.comment_ids?.[0] ?? [...(s?.open ?? [])].at(-1)
+    const parentId = cid == null ? undefined : (s?.roots.get(String(cid)) ?? String(cid))
+    const c = await linear.comment(a.repo, a.issue, formatReply({ ...a, tag, format: 'linear' }), { parentId })
+    return c.url
+  }
+
+  const GONE = /Entity not found|invalid entity/i
+  async function linearMarkDone(s, cid) {
+    const notes = []
+    let mine = []
+    const pending = await s?.reacting.get(cid)
+    s?.reacting.delete(cid)
+    if (LINEAR_REACTION) {
+      if (pending) mine = [pending]
+      else {
+        const list = await linear.myReactions(cid, LINEAR_REACTION).catch(e => { notes.push(`could not list reactions (${e.message})`); return [] })
+        if (list === null) return { gone: true }
+        mine = list
+        if (!mine.length && !notes.length) notes.push(`no ${LINEAR_REACTION} to remove`)
+      }
+      // A deleted comment takes its reactions with it ("Entity not found: Reaction").
+      for (const id of mine) notes.push(await linear.unreact(id).then(() => `removed ${LINEAR_REACTION}`, e => GONE.test(e.message) ? null : `could not remove ${LINEAR_REACTION} (${e.message})`))
+    }
+    if (LINEAR_DONE !== 'resolve' && LINEAR_DONE_REACTION) {
+      const added = await linear.react(cid, LINEAR_DONE_REACTION).then(() => `added ${LINEAR_DONE_REACTION}`, e => e)
+      if (added instanceof Error && GONE.test(added.message)) return { gone: true } // the comment itself is gone
+      notes.push(added instanceof Error ? `could not add ${LINEAR_DONE_REACTION} (${added.message})` : added)
+    }
+    if (LINEAR_DONE === 'resolve' || LINEAR_DONE === 'both') {
+      const root = s?.roots.get(String(cid)) ?? cid
+      notes.push(await linear.resolveThread(root).then(() => 'resolved the thread', e => `could not resolve the thread (${e.message})`))
+    }
+    return { notes: notes.filter(Boolean) }
+  }
+
   async function markDone(repo, issue, commentIds) {
     const s = subs.get(`${repo}#${issue}`)
-    const ids = commentIds?.length ? commentIds : [...(s?.open ?? [])]
+    const ids = (commentIds?.length ? commentIds : [...(s?.open ?? [])]).map(id => normId(repo, id))
     if (!ids.length) return 'no open /bot requests to mark done'
+    if (isLinear(repo)) {
+      const lines = []
+      for (const cid of ids) {
+        const res = await linearMarkDone(s, cid)
+        s?.open.delete(cid)
+        s?.roots.delete(String(cid))
+        lines.push(res.gone ? `comment ${cid}: gone (deleted), skipped` : `comment ${cid}: ${res.notes.join(', ')}`)
+      }
+      if (s) saveState()
+      return lines.join('\n')
+    }
     const me = await myLogin()
     const lines = []
     for (const cid of ids) {
