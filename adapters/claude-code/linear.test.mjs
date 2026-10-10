@@ -1,4 +1,5 @@
 // Integration test: a Linear issue through the real server, the Claude Code channel, and a fake Linear GraphQL API.
+import { fileURLToPath } from 'node:url'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -8,7 +9,7 @@ import path from 'node:path'
 import { until, sleep, startServer } from '../testkit.mjs'
 
 let t, linear, calls, refreshes, credsFile
-const entry = new URL('./channel.mjs', import.meta.url).pathname
+const entry = fileURLToPath(new URL('./channel.mjs', import.meta.url))
 
 // Fake api.linear.app: records every GraphQL call; /oauth/token refreshes.
 before(async () => {

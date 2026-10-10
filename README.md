@@ -26,6 +26,8 @@ npm ci && node --test
 
 Then: [deploy the server](#deploy) (pick a tunnel), [add the webhook](#deploy) to each repo you want to talk through, and [connect Claude Code](#use-from-claude-code).
 
+For Codex or ChatGPT.app, use the [Codex adapter setup](adapters/codex/README.md), including the opt-in macOS launcher for local ChatGPT builds that start their own stdio app-server. The MCP tools loading does not by itself verify incoming delivery.
+
 ## Deploy
 
 GitHub must reach the server's `/webhook/github`. `deploy/issue-channel.sh` runs the server and a `cloudflared` tunnel as two containers (plain `sudo docker`; set `DOCKER=docker` if your user can run docker). Pick one tunnel:
@@ -113,6 +115,20 @@ Setup:
 4. Ask the agent: *"listen to Linear issue ENG-123"* (it calls `issue_subscribe` with `repo: "linear:ENG", issue: 123`).
 
 Peers replicate Linear deliveries too (to `/webhook/linear` with Linear's headers; `LINEAR_WEBHOOK_SECRET` must be the same on every box, like the rest of `.env`).
+
+#### Local Linear OAuth without Docker or a tunnel
+
+When the browser and channel run on the same computer, use the loopback PKCE helper:
+
+```sh
+node deploy/linear-login-local.mjs
+```
+
+It prints a local login page and the **exact callback URL** to add to your private Linear OAuth app. Add that callback, then open the login page on the same computer and authorize. The helper binds only to `127.0.0.1`, stores credentials in the usual `linear.env` with mode 0600, and stops shortly after a successful login (or after 30 minutes). Press Ctrl-C to cancel. A new run generates a new secret callback path; update the app's callback URL accordingly. Set `PORT` if 8795 is occupied.
+
+It requests the same scopes as the tunneled login: acting as you, `read,write,comments:create,admin` (`admin` lets the agent create webhooks and delete comments); as the app, without `admin`, which Linear refuses for app users. For fewer scopes, set them explicitly, for example `LINEAR_LOGIN_SCOPES=read,write,comments:create node deploy/linear-login-local.mjs` (also honored by the tunneled login).
+
+This replaces the **login tunnel**, not the event transport: configure the author allowlist and a reachable signed webhook as described above. A blocked Cloudflare connection will still prevent webhook delivery even when local OAuth succeeds; use another reachable webhook host. Finish setup with a new `/bot` and a reply visible in its Linear thread.
 
 ## Use from Claude Code
 

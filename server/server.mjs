@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // issue-channel server: GitHub webhook receiver + SQLite event log + long-poll API.
 // Dependency-free (Node >= 24, node:sqlite).
+import { pathToFileURL } from 'node:url'
 import http from 'node:http'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -586,7 +587,8 @@ function requireEnv(name) {
   return v
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Keep this server standalone: the Docker image copies only server.mjs.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   const db = openDb(process.env.DB_PATH ?? '/data/events.db')
   const num = name => process.env[name] ? Number(process.env[name]) : undefined
   const retry = Object.fromEntries(Object.entries({

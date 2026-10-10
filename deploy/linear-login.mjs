@@ -2,7 +2,8 @@
 // One-time Linear OAuth login (authorization code + PKCE) served behind a temporary quick tunnel by
 // `deploy/issue-channel.sh linear-login`. Linear has no device-code flow, so this is the closest thing:
 // open https://<tunnel>/<LOGIN_SECRET>/, approve in Linear, and the tokens land in $STATE/linear.env (0600).
-// Default: the agent acts as YOU (replies, 👀 and ✅ show as you; scopes include admin). Tick "act as the app"
+// Default: the agent acts as YOU (replies, 👀 and ✅ show as you; scopes include admin). LINEAR_LOGIN_SCOPES
+// overrides the requested scopes (the local wrapper omits admin). Tick "act as the app"
 // to have it act as the OAuth app instead (Linear refuses admin for app users).
 // Other keys already in linear.env (allowlist, ...) are kept. Tokens are never printed or logged.
 import http from 'node:http'
@@ -45,7 +46,7 @@ async function form(req) {
   return new URLSearchParams(s)
 }
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x')
     if (!url.pathname.startsWith(base + '/') && url.pathname !== base) return send(res, 404, 'not found')
@@ -55,6 +56,7 @@ http.createServer(async (req, res) => {
       return send(res, 200, page('issue-channel: Linear login', `
 <p>1. In Linear: <b>Settings → API → OAuth applications</b>, create (or open) an app and add this <b>callback URL</b>:<br><code>${esc(redirectUri)}</code></p>
 <p>2. Paste its client ID (the client secret is optional with PKCE; add it if the token exchange asks for it).</p>
+<p>Requested scopes: <code>${esc(process.env.LINEAR_LOGIN_SCOPES ?? 'read,write,comments:create,admin')}</code>. App-actor login always excludes admin.</p>
 <form method=post action="${base}/start">
 <p><input name=client_id placeholder="client id" value="${esc(known)}" required style="width:100%;font:inherit"></p>
 <p><input name=client_secret placeholder="client secret (optional)" type=password style="width:100%;font:inherit"></p>
@@ -72,7 +74,8 @@ http.createServer(async (req, res) => {
       pending.set(state, { verifier, clientId, clientSecret: f.get('client_secret')?.trim() || '', webhookSecret: f.get('webhook_secret')?.trim() || '', actor, at: Date.now() })
       const q = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', prompt: 'consent', state,
         // Linear refuses the admin scope for app users.
-        scope: actor === 'app' ? 'read,write,comments:create' : 'read,write,comments:create,admin',
+        scope: (process.env.LINEAR_LOGIN_SCOPES ?? 'read,write,comments:create,admin').split(',')
+          .map(s => s.trim()).filter(s => s && (actor !== 'app' || s !== 'admin')).join(','),
         code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' })
       if (actor === 'app') q.set('actor', 'app')
       res.writeHead(303, { location: `https://linear.app/oauth/authorize?${q}` })
@@ -102,6 +105,9 @@ http.createServer(async (req, res) => {
       })
       if (p.webhookSecret) writeEnv(path.join(STATE, '.env'), { ...readEnv(path.join(STATE, '.env')), LINEAR_WEBHOOK_SECRET: p.webhookSecret })
       if (DONE_FILE) fs.writeFileSync(DONE_FILE, `${p.actor}${p.webhookSecret ? ' webhook-secret' : ''}\n`)
+      if (process.env.ISSUECHAN_LOGIN_EXIT_ON_DONE === '1') {
+        setTimeout(() => server.close(), 1000).unref()
+      }
       return send(res, 200, page('Done', '<p>The token is stored on the host. You can close this tab.</p>'))
     }
     send(res, 404, 'not found')

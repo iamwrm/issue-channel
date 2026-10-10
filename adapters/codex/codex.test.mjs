@@ -1,5 +1,6 @@
 // Integration tests: the Codex entry (mcp.mjs) over MCP stdio against the real server (in-memory db)
 // and a fake Codex app-server (WebSocket on a unix socket). GitHub is never called.
+import { fileURLToPath } from 'node:url'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -9,7 +10,7 @@ import path from 'node:path'
 import { WebSocketServer } from 'ws'
 import { REPO, until, startServer } from '../testkit.mjs'
 
-const ENTRY = new URL('./mcp.mjs', import.meta.url).pathname
+const ENTRY = fileURLToPath(new URL('./mcp.mjs', import.meta.url))
 let t, sockDir, sock, httpServer
 const calls = [] // JSON-RPC requests the fake app-server received
 const replies = [] // client responses to the fake app-server's own requests
