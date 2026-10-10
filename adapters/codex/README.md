@@ -30,7 +30,7 @@ codex --remote "unix://$SOCK" -m gpt-6.1-sol -c model_reasoning_effort=medium
 Then ask the agent to `issue_subscribe` (with a `session` name) as usual. `spawn-agent.sh --harness codex` is planned (#22, open item 7).
 
 ### With the Codex GUI (managed daemon)
-The Codex desktop app and ChatGPT's Remote (SSH) attach to the **managed app-server daemon** at `~/.codex/app-server-control/app-server-control.sock` (a symlink into `/tmp/codex-daemon-<uid>/`; the same WebSocket-on-unix protocol as `--listen`). The app starts the daemon itself (`codex app-server daemon bootstrap|start`), so `-c` flags don't reach it: register issuechan in `~/.codex/config.toml`:
+Clients attached to the **managed app-server daemon** use `~/.codex/app-server-control/app-server-control.sock` (a symlink into `/tmp/codex-daemon-<uid>/`; the same WebSocket-on-unix protocol as `--listen`). This includes the Codex desktop app and ChatGPT's Remote (SSH). Local ChatGPT builds can instead start a private stdio app-server; use the launcher below for those builds. The daemon reads its own configuration, so register issuechan in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.issuechan]
@@ -42,6 +42,21 @@ default_tools_approval_mode = "approve"
 No `env` is needed: without `ISSUECHAN_CODEX_SOCK` the adapter uses the daemon socket. Run `codex app-server daemon restart` after editing the config, open a thread in the GUI, and ask the agent to `issue_subscribe`.
 
 This entry also makes a plain `codex` (with its own embedded app-server) start issuechan. Those deliveries then fail safely and are retried: the adapter only sends `turn/start` to a thread already loaded in the app-server it talks to, and never resumes one itself, so no turn runs where no UI shows it. Use `codex --remote unix://…` or the GUI for issuechan agents.
+
+### Local ChatGPT.app on macOS
+
+Some ChatGPT.app builds launch their bundled Codex app-server over stdio. Adding MCP configuration makes the tools appear, but does **not** put that chat in the managed daemon's `thread/loaded/list`: receiving `/bot` messages requires the desktop and issuechan to share an app-server.
+
+The opt-in [launcher](start-chatgpt-with-issuechan.command) starts the managed daemon and sets `CODEX_CLI_PATH` for that app process to [desktop-proxy.sh](desktop-proxy.sh). Only the embedded `app-server` invocation is replaced by [desktop-bridge.mjs](desktop-bridge.mjs), which converts JSONL on stdin/stdout to WebSocket messages on the daemon's Unix socket. Ordinary CLI commands and daemon management pass through to the bundled CLI. The bridge forwards all messages unchanged, including approval requests and the desktop's responses; it never makes approval decisions.
+
+1. Install Node 24+, run `npm ci` in this checkout, and add the MCP entry above using **absolute** Node and adapter paths if the app's PATH differs from your shell. Configure the event server and provider credentials first (see the root README).
+2. With the app's bundled CLI (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` by default), run `app-server daemon bootstrap` once if no managed daemon is installed. Run `app-server daemon restart` with that same executable after changing its configuration.
+3. **Quit ChatGPT completely**, then double-click `adapters/codex/start-chatgpt-with-issuechan.command` in Finder, or run it in Terminal. Reopening an already-running app does not change its connection.
+4. Open the intended chat and call `issue_subscribe`. Post a **new** `/bot` comment, verify that it appears as user input in that chat, and use `issue_reply` to confirm the return path. Tools appearing alone is not an end-to-end check.
+
+Defaults: `/Applications/ChatGPT.app` and `node` on PATH. Override `ISSUECHAN_CHATGPT_APP` for another installation path and `ISSUECHAN_NODE_BIN` for an absolute Node executable. Paths containing spaces are supported. Use this launcher on subsequent starts when incoming messages are needed, then reopen the subscribed chat. No application bundle, global feature flags, or approval settings are changed by the launcher. Quit and launch the app normally to stop using the bridge.
+
+This is an experimental compatibility path for builds honoring `CODEX_CLI_PATH`; it was exercised with bundled codex-cli 0.160.0 on macOS. Desktop updates may change the CLI path or transport. If tools work but incoming messages do not, verify the app was fully quit and launched this way, that the managed daemon is running, and that the subscribed chat is loaded there. Do not resume a hidden thread just to force delivery.
 
 | Setting | Why |
 |---|---|
@@ -60,7 +75,7 @@ This entry also makes a plain `codex` (with its own embedded app-server) start i
 
 ## Not yet
 - Auto-resume after a restart is skipped when the binding is ambiguous (see above); then the agent's first tool call binds and resumes it, or ask it to `issue_subscribe` again (it resumes from the saved cursor).
-- Not yet tested with the GUI itself: whether it renders a turn started or steered by another client live (the TUI does).
+- Local ChatGPT through the framing bridge rendered incoming comments and steered a running setup turn live (macOS, bundled codex-cli 0.160.0, 2026-10-10). Other GUI builds still need an end-to-end check.
 - `core/reply-format.mjs` can't tag `gh` comments from Codex (no thread id in the shell env); use `issue_reply`.
 - MCP server stderr goes to Codex's log database (`~/.codex/logs_2.sqlite`, table `logs`, target `codex_rmcp_client::stdio_server_launcher`).
 

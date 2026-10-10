@@ -3,6 +3,7 @@
 // CLM idea (context as a file the model edits), applied offline: `mirror` prints the
 // session as numbered turns, the agent writes an edit plan, `fork` writes a new session.
 // The source log is never modified.
+import { isMain } from '../core/entrypoint.mjs'
 import { readFileSync, writeFileSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -178,7 +179,7 @@ export function handoff(fromId, toId, stateDir = STATE) {
   return dest;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   const [cmd, a, b] = process.argv.slice(2);
   try {
     if (cmd === 'mirror') process.stdout.write(mirror(loadTurns(findLog(a))));

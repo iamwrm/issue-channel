@@ -8,6 +8,7 @@
 //   linear.mjs set-description ENG-123 --file F
 //   linear.mjs set-state ENG-123 (in-progress|completed|canceled|started|backlog|unstarted|<state name>)
 //   linear.mjs create ENG --title T [--description D | --file F] [--state in-progress]   prints {identifier, url, state}
+import { isMain } from '../../../core/entrypoint.mjs'
 import fs from 'node:fs'
 import { gql, viewer } from '../../../core/linear.mjs'
 import { LINEAR_MARKER } from '../../../core/lib.mjs'
@@ -121,7 +122,7 @@ const commands = {
   },
 }
 
-if (import.meta.url === `file://${fs.realpathSync(process.argv[1])}`) {
+if (isMain(import.meta.url)) {
   const run = commands[cmd] ?? (() => die(`unknown command "${cmd ?? ''}"; see the header of this file`))
   run(args).catch(e => die(e.message))
 }

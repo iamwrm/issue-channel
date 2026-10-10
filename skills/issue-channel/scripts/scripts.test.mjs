@@ -1,4 +1,5 @@
 // The skill's helper scripts: ref parsing, and linear.mjs against a fake Linear API.
+import { fileURLToPath } from 'node:url'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -46,7 +47,7 @@ before(async () => {
 })
 after(() => { api.close(); fs.rmSync(dir, { recursive: true, force: true }) })
 
-const cli = (...args) => new Promise(resolve => execFile(process.execPath, [new URL('./linear.mjs', import.meta.url).pathname, ...args], {
+const cli = (...args) => new Promise(resolve => execFile(process.execPath, [fileURLToPath(new URL('./linear.mjs', import.meta.url)), ...args], {
   env: { PATH: process.env.PATH, LINEAR_API_URL: `http://127.0.0.1:${api.address().port}/graphql`, ISSUECHAN_LINEAR_ENV_FILE: path.join(dir, 'linear.env') },
 }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr })))
 

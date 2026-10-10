@@ -1,5 +1,6 @@
 // Integration tests: the Claude Code entry (channel.mjs) over MCP stdio against the real server (in-memory db).
 // GitHub is never called: reactions are disabled and no reply/done tools are used.
+import { fileURLToPath } from 'node:url'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
@@ -15,7 +16,7 @@ const comment = (...a) => t.comment(...a)
 const api = (...a) => t.api(...a)
 const registered = issue => t.registered(issue)
 // Start channel.mjs as a Claude Code session with the given id; collects channel notifications.
-const start = (sessionId, entry = new URL('./channel.mjs', import.meta.url).pathname) =>
+const start = (sessionId, entry = fileURLToPath(new URL('./channel.mjs', import.meta.url))) =>
   t.start(entry, { ISSUECHAN_RESUME_DELAY_MS: '400', CLAUDE_CODE_SESSION_ID: sessionId })
 
 test('no delivery after unsubscribe, even from a long poll already in flight', async () => {
@@ -64,7 +65,7 @@ test('handoff resume: waits for initialized, delivers the backlog, takes the new
 })
 
 test('the old channel/channel.mjs path (what ~/.claude.json runs) still starts the channel', async () => {
-  const c = await start(crypto.randomUUID(), new URL('../../channel/channel.mjs', import.meta.url).pathname)
+  const c = await start(crypto.randomUUID(), fileURLToPath(new URL('../../channel/channel.mjs', import.meta.url)))
   try {
     const caps = c.client.getServerCapabilities()
     assert.deepEqual(caps.experimental, { 'claude/channel': {} })

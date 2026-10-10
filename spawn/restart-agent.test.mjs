@@ -2,8 +2,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
-const run = (...args) => spawnSync('bash', [new URL('./restart-agent.sh', import.meta.url).pathname, ...args], { encoding: 'utf8' })
+const run = (...args) => spawnSync('bash', [fileURLToPath(new URL('./restart-agent.sh', import.meta.url)), ...args], { encoding: 'utf8' })
 
 test('restart-agent.sh: usage, required args, uuid check, missing plan', () => {
   const h = run('--help')
