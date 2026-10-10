@@ -91,6 +91,29 @@ deploy/issue-channel.sh peers                                     # on either bo
 - `/bot <name>` works across boxes: `GET /api/subscriptions` adds the peers' sessions (and their peers', 2 hops, 3 s timeout each, peers that are down are skipped), so a session listening on the laptop counts as a target on the primary too.
 - Without a server on the new box at all: set `ISSUECHAN_URL` to the primary's public URL (and `ISSUECHAN_API_KEY`). That's simpler, but the box then depends on the primary being up.
 
+### Linear issues
+
+A Linear issue works like a GitHub issue: comment `/bot …` on it, and the agent receives it and replies **in that comment's thread**. By default the agent **acts as you**, the way it uses your `gh` login on GitHub: its replies, 👀 and ✅ show as you.
+
+| | GitHub | Linear |
+|---|---|---|
+| Ref in the tools | `repo: "owner/name"`, `issue: 12` | `repo: "linear:ENG"`, `issue: 123` (= ENG-123) |
+| Webhook | `/webhook/github`, `X-Hub-Signature-256`, `WEBHOOK_SECRET` | `/webhook/linear`, `Linear-Signature` (hex HMAC of the body) + `webhookTimestamp` within 60 s, `LINEAR_WEBHOOK_SECRET` |
+| Reply | new top-level comment, `<details>` toggle, bot marker `<!-- issue-channel:bot -->` | reply in the `/bot` comment's thread (`commentCreate` with `parentId` = thread root), Linear's collapsible section (`+++`), marker `[//]: # (issue-channel:bot)` (kept in the markdown, not rendered; Linear would show an HTML comment as text) |
+| 👀 / done | reactions `eyes` → `rocket` | reactions `eyes` → `white_check_mark`; or resolve the thread (`ISSUECHAN_LINEAR_DONE=resolve` or `both`) |
+| Who counts | the repo owner (or `ISSUECHAN_ALLOWED_AUTHORS`) | emails in `LINEAR_ALLOWED_AUTHORS` (in `linear.env`) or `ISSUECHAN_LINEAR_ALLOWED` |
+| Self-filter | the bot marker | the marker; when acting as an app, also comments by the app user (`<uuid>@oauthapp.linear.app`) |
+
+**Acting as you vs. as an app.** As you (default): replies look like yours, you can grant `admin` (so the agent can create webhooks and delete comments through the API), but Linear doesn't notify you about the agent's replies, since they are your own comments. As an OAuth app (`actor=app`): replies show as the app and notify you like any other commenter, but Linear refuses `admin` for app users, so webhooks go in the app's settings and other users' comments can't be deleted.
+
+Setup:
+1. **Log in:** create an OAuth application in Linear (Settings → API → OAuth applications), then run `deploy/issue-channel.sh linear-login`. It serves a login page behind a throwaway quick tunnel at a secret path and prints the **callback URL** to add to the app and the page to open. Linear has no device-code flow, so this is the equivalent. Approve, and the tokens land in `~/.local/share/issue-channel/linear.env` (0600); the page and tunnel stop. Access tokens last 24 h; the channel refreshes them and writes the new pair back. Tick "act as the app" on the page for the app actor. Instead of OAuth, a personal API key works too: `LINEAR_API_KEY=lin_api_…` in `linear.env`.
+2. **Allowlist:** `LINEAR_ALLOWED_AUTHORS=you@example.com` (comma-separated) in `linear.env`.
+3. **Webhook** (events `Comment` and `Issue`, URL `https://<hostname>/webhook/linear`): acting as you with `admin`, `deploy/issue-channel.sh linear-webhook ENG` creates it for team `ENG`, stores a fresh `LINEAR_WEBHOOK_SECRET` in `.env` and restarts the server. Or enable **Webhooks** in the OAuth app's settings and paste its signing secret on the login page (saved as `LINEAR_WEBHOOK_SECRET`; `linear-login` restarts the server).
+4. Ask the agent: *"listen to Linear issue ENG-123"* (it calls `issue_subscribe` with `repo: "linear:ENG", issue: 123`).
+
+Peers replicate Linear deliveries too (to `/webhook/linear` with Linear's headers; `LINEAR_WEBHOOK_SECRET` must be the same on every box, like the rest of `.env`).
+
 ## Use from Claude Code
 
 ```sh

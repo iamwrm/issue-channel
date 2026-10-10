@@ -1,6 +1,10 @@
 // Pure logic for the issuechan channel: buffering, /bot trigger parsing, formatting.
 
 export const BOT_MARKER = '<!-- issue-channel:bot -->'
+// Linear shows an HTML comment as text, but drops a markdown link reference like this one from the rendered
+// comment while keeping it in the body: an invisible marker for replies posted as a user (not as the app).
+export const LINEAR_MARKER = '[//]: # (issue-channel:bot)'
+const isBotBody = body => (body ?? '').includes(BOT_MARKER) || (body ?? '').includes(LINEAR_MARKER)
 
 // `/bot` alone, `/bot <session>` (single token on the first line), or `/bot <free text>`.
 export function parseTrigger(body) {
@@ -48,7 +52,8 @@ export class IssueBuffer {
         return null
       }
       if (ev.action !== 'created' && ev.action !== 'edited') return null
-      if ((ev.body ?? '').includes(BOT_MARKER)) return null
+      // Agent replies: the marker (GitHub), or posted by an app (Linear OAuth actor=app sets botActor).
+      if (isBotBody(ev.body) || ev.bot_actor) return null
       if (!this.allowedAuthor(ev.author)) return null
       const body = ev.body ?? ''
       const seen = this.delivered.get(key)
@@ -56,13 +61,13 @@ export class IssueBuffer {
       this.items.delete(key)
       this.items.set(key, {
         kind: 'comment', id: ev.comment_id, action: ev.action, author: ev.author, body, at: ev.updated_at, seq: ev.seq,
-        previous: ev.action === 'edited' ? seen : undefined,
+        previous: ev.action === 'edited' ? seen : undefined, parent: ev.parent_id ?? undefined,
       })
       const trig = ev.action === 'created' ? parseTrigger(body) : null
-      return trig ? { ...trig, author: ev.author, comment_id: ev.comment_id, seq: ev.seq } : null
+      return trig ? { ...trig, author: ev.author, comment_id: ev.comment_id, seq: ev.seq, ...(ev.parent_id ? { parent_id: ev.parent_id } : {}) } : null
     }
     if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened')) {
-      if (!this.allowedAuthor(ev.author) || (ev.body ?? '').includes(BOT_MARKER)) return null
+      if (!this.allowedAuthor(ev.author) || isBotBody(ev.body) || ev.bot_actor) return null
       const body = ev.body ?? ''
       const seen = this.delivered.get('issue')
       if (seen === body) { this.items.delete('issue'); return null }
@@ -77,7 +82,7 @@ export class IssueBuffer {
     if (ev.event === 'issue_comment') {
       const key = `comment:${ev.comment_id}`
       if (ev.action === 'deleted') this.delivered.delete(key)
-      else if ((ev.action === 'created' || ev.action === 'edited') && this.allowedAuthor(ev.author) && !(ev.body ?? '').includes(BOT_MARKER)) {
+      else if ((ev.action === 'created' || ev.action === 'edited') && this.allowedAuthor(ev.author) && !isBotBody(ev.body) && !ev.bot_actor) {
         this.delivered.set(key, ev.body ?? '')
       }
     } else if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened') && this.allowedAuthor(ev.author)) {
@@ -146,24 +151,32 @@ export function replyTag({ name, agent }) {
   return parts.join(' · ')
 }
 
+// Where an issue lives: GitHub "owner/name", or Linear "linear:<TEAM>" (issue ENG-123 = linear:ENG + 123).
+export const isLinear = repo => /^linear:[A-Za-z0-9]+$/.test(repo ?? '')
+export const isGitHub = repo => /^[\w.-]+\/[\w.-]+$/.test(repo ?? '')
+export const issueLabel = (repo, issue) => isLinear(repo) ? `Linear issue ${repo.slice(7)}-${issue}` : `GitHub issue ${repo}#${issue}`
+
 // Reply layout on the issue: "🤖 <tag> · <summary>", then a clickable "Full reply" toggle.
-export function formatReply({ summary, body, tag }) {
+// Linear: the reply sits in the /bot comment's thread, the toggle is Linear's collapsible section (+++), and the
+// invisible LINEAR_MARKER tells replies apart when the token acts as a user (as the app, the author does too).
+export function formatReply({ summary, body, tag, format = 'github' }) {
   const line = String(summary ?? '').replace(/\s+/g, ' ').trim()
   if (!line) throw new Error('summary is required')
   const full = String(body ?? '').trim()
   if (!full) throw new Error('body is required')
   const head = tag ? `🤖 ${tag} · ${line}` : `🤖 ${line}`
+  if (format === 'linear') return `${head}\n\n+++ Full reply\n\n${full}\n\n+++\n\n${LINEAR_MARKER}\n`
   const esc = head.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${BOT_MARKER}\n`
 }
 
 export function formatDelivery({ repo, issue, title, trigger, items }) {
-  const head = `GitHub issue ${repo}#${issue}${title ? ` "${title}"` : ''}: /bot from @${trigger.author}` +
-    (trigger.target ? ` (to session ${trigger.target})` : '')
+  const head = `${issueLabel(repo, issue)}${title ? ` "${title}"` : ''}: /bot from @${trigger.author}` +
+    (trigger.target ? ` (to session ${trigger.target})` : '') + (trigger.parent_id ? ` (in the thread of comment ${trigger.parent_id}; issue_reply answers in that thread)` : '')
   const parts = items.map(it => {
     const label = it.kind === 'issue'
       ? `[issue body · @${it.author} · ${it.action}]`
-      : `[comment ${it.id} · @${it.author} · ${it.action}${it.at ? ` · ${it.at}` : ''}]`
+      : `[comment ${it.id} · @${it.author} · ${it.action}${it.at ? ` · ${it.at}` : ''}${it.parent ? ` · in thread of ${it.parent}` : ''}]`
     if (it.action === 'deleted') return `${label}\nThis comment you saw earlier was deleted. It said:\n${it.body}`
     if (it.previous != null) return `${label}\nChanged since you last saw it:\n\`\`\`diff\n${lineDiff(it.previous, it.body)}\n\`\`\`\nFull text now:\n${it.body}`
     return `${label}\n${it.body}`

@@ -18,7 +18,15 @@ const HOP_HEADER = 'x-issue-channel-hop'
 const PEER_SIG_HEADER = 'x-issue-channel-signature'
 export const MAX_HOPS = 4
 const FORWARD_HEADERS = ['content-type', 'user-agent', 'x-github-event', 'x-github-delivery', 'x-github-hook-id',
-  'x-github-hook-installation-target-id', 'x-github-hook-installation-target-type', 'x-hub-signature', 'x-hub-signature-256']
+  'x-github-hook-installation-target-id', 'x-github-hook-installation-target-type', 'x-hub-signature', 'x-hub-signature-256',
+  'linear-delivery', 'linear-event', 'linear-signature', 'linear-timestamp']
+// Linear asks receivers to reject a webhook whose webhookTimestamp is older than a minute (replay guard).
+const LINEAR_MAX_SKEW_MS = 60 * 1000
+// Webhook sources: where the delivery id, event name and signature live. A copy to a peer goes to the same path.
+const SOURCES = {
+  github: { path: '/webhook/github', delivery: 'x-github-delivery', event: 'x-github-event' },
+  linear: { path: '/webhook/linear', delivery: 'linear-delivery', event: 'linear-event' },
+}
 const PEER_TIMEOUT_MS = 10000
 // Copies to a peer go through a durable outbox, one peer at a time and in order. Backoff is per peer
 // (it measures the peer's connectivity, not one message): base * 2^(failures-1), capped, with jitter.
@@ -76,6 +84,9 @@ export function openDb(dbPath) {
       PRIMARY KEY (peer, seq)
     );
   `)
+  // Columns added after the first release (Linear threads and app authors).
+  const eventCols = db.prepare('PRAGMA table_info(events)').all().map(c => c.name)
+  for (const c of ['parent_id', 'bot_actor']) if (!eventCols.includes(c)) db.exec(`ALTER TABLE events ADD COLUMN ${c} TEXT`)
   // peers tables from an earlier build of this branch: add the backoff columns.
   const peerCols = db.prepare('PRAGMA table_info(peers)').all().map(c => c.name)
   if (!peerCols.includes('fail_count')) db.exec('ALTER TABLE peers ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0')
@@ -102,6 +113,49 @@ export function extract(event, payload) {
     created_at: (comment ?? issue)?.created_at ?? null,
     updated_at: (comment ?? issue)?.updated_at ?? null,
   }
+}
+
+// Linear: a Comment or Issue webhook mapped onto the GitHub-shaped event model, so the core treats both alike.
+// The issue ref is repo "linear:<TEAM>" + the issue number, e.g. ENG-123 -> ("linear:ENG", 123).
+const LINEAR_ACTIONS = { Comment: { create: 'created', update: 'edited', remove: 'deleted' }, Issue: { create: 'opened', update: 'edited', remove: 'deleted' } }
+export function extractLinear(type, payload) {
+  const d = payload.data ?? {}
+  const ref = id => { const m = String(id ?? '').match(/^([A-Za-z0-9]+)-(\d+)$/); return m ? { repo: `linear:${m[1].toUpperCase()}`, issue: Number(m[2]) } : { repo: null, issue: null } }
+  const actorOf = u => u?.email ?? (u?.name ? `app:${u.name}` : null)
+  const map = LINEAR_ACTIONS[type]
+  let action = map?.[payload.action] ?? payload.action ?? null
+  // An update that doesn't touch the text (reactions, resolving, moving) is not an edit for the agent.
+  const from = payload.updatedFrom ?? {}
+  if (payload.action === 'update' && type === 'Comment' && !('body' in from)) action = 'updated'
+  if (payload.action === 'update' && type === 'Issue' && !('description' in from) && !('title' in from)) action = 'updated'
+  if (type === 'Comment') {
+    // Comments posted with an OAuth app token (actor=app) come from the app's user, whose email is
+    // <uuid>@oauthapp.linear.app; botActor stays null for them (seen live), so the email marks them too.
+    const appUser = /@oauthapp\.linear\.app$/i.test(d.user?.email ?? '') ? JSON.stringify({ app: d.user.name ?? null, id: d.user.id ?? null }) : null
+    return {
+      event: 'issue_comment', action, ...ref(d.issue?.identifier), comment_id: d.id ?? null,
+      author: d.botActor ? `app:${(typeof d.botActor === 'object' ? d.botActor.name : null) ?? 'bot'}` : (d.user?.email ?? actorOf(payload.actor)),
+      title: d.issue?.title ?? null, body: d.body ?? null, created_at: d.createdAt ?? null, updated_at: d.updatedAt ?? null,
+      parent_id: d.parentId ?? null, bot_actor: d.botActor ? (typeof d.botActor === 'string' ? d.botActor : JSON.stringify(d.botActor)) : appUser,
+    }
+  }
+  if (type === 'Issue') {
+    return {
+      event: 'issues', action, ...ref(d.identifier ?? (d.team?.key && d.number != null ? `${d.team.key}-${d.number}` : null)), comment_id: null,
+      author: actorOf(payload.actor), title: d.title ?? null, body: d.description ?? null, created_at: d.createdAt ?? null, updated_at: d.updatedAt ?? null,
+      parent_id: null, bot_actor: payload.actor?.type === 'oauthClient' || payload.actor?.type === 'app' || /@oauthapp\.linear\.app$/i.test(payload.actor?.email ?? '')
+        ? JSON.stringify({ app: payload.actor.name ?? null, id: payload.actor.id ?? null }) : null,
+    }
+  }
+  return { event: `linear:${type}`, action, repo: null, issue: null, comment_id: d.id ?? null, author: actorOf(payload.actor), title: null, body: null,
+    created_at: d.createdAt ?? null, updated_at: d.updatedAt ?? null, parent_id: null, bot_actor: null }
+}
+
+export function verifyLinearSignature(secret, raw, header) {
+  if (typeof header !== 'string' || !/^[0-9a-f]{64}$/i.test(header)) return false
+  const want = Buffer.from(crypto.createHmac('sha256', secret).update(raw).digest('hex'))
+  const got = Buffer.from(header.toLowerCase())
+  return got.length === want.length && crypto.timingSafeEqual(got, want)
 }
 
 export function verifySignature(secret, raw, header) {
@@ -162,7 +216,7 @@ export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status }
 }
 
-const SUMMARY_COLS = 'seq, delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at'
+const SUMMARY_COLS = 'seq, delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at, parent_id, bot_actor'
 
 export function peerSignature(secret, { delivery, event, hop }, raw) {
   const h = crypto.createHmac('sha256', secret).update(`issue-channel-peer\n${delivery}\n${event}\n${hop}\n`).update(raw)
@@ -186,14 +240,14 @@ export function backoffMs(failures, { baseMs, maxMs, jitter }, rand = Math.rando
   return Math.round(ms * (1 + jitter * (2 * rand() - 1)))
 }
 
-export function createApp({ db, webhookSecret, apiKey, now = () => new Date().toISOString(), log = console.error,
-  fetch = globalThis.fetch, retry = {} }) {
+export function createApp({ db, webhookSecret, apiKey, linearSecret = null, now = () => new Date().toISOString(), log = console.error,
+  fetch = globalThis.fetch, retry = {}, clock = Date.now }) {
   retry = { ...DEFAULT_RETRY, ...retry }
   if (!webhookSecret || !apiKey) throw new Error('webhookSecret and apiKey are required')
   const waiters = new Set()
   const insert = db.prepare(`
-    INSERT INTO events (delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at, payload)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO events (delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at, payload, parent_id, bot_actor)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (delivery_id) DO NOTHING`)
   const apiKeyBuf = Buffer.from(`Bearer ${apiKey}`)
 
@@ -243,16 +297,19 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
   async function sendOnce(peer, row) {
     const raw = Buffer.from(row.payload, 'utf8')
     const h = JSON.parse(row.headers)
+    const src = SOURCES[h[':source']] ?? SOURCES.github
+    delete h[':source']
+    const delivery = h[src.delivery]
     h[HOP_HEADER] = String(row.hop)
-    h[PEER_SIG_HEADER] = peerSignature(webhookSecret, { delivery: h['x-github-delivery'], event: h['x-github-event'], hop: row.hop }, raw)
+    h[PEER_SIG_HEADER] = peerSignature(webhookSecret, { delivery, event: h[src.event], hop: row.hop }, raw)
     try {
-      const r = await fetch(`${peer.url}/webhook/github`, { method: 'POST', headers: h, body: raw, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) })
+      const r = await fetch(`${peer.url}${src.path}`, { method: 'POST', headers: h, body: raw, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) })
       await r.arrayBuffer().catch(() => {})
       // 2xx: delivered (200 = the peer already had it). 4xx: the peer rejects it (bad signature, ...), and
       // retrying won't help, so drop it. Anything else is a connectivity problem: back off.
-      return { status: String(r.status), done: r.status < 500, delivery: h['x-github-delivery'] }
+      return { status: String(r.status), done: r.status < 500, delivery }
     } catch (e) {
-      return { status: `error: ${e.cause?.code ?? e.name ?? e.message}`, done: false, delivery: h['x-github-delivery'] }
+      return { status: `error: ${e.cause?.code ?? e.name ?? e.message}`, done: false, delivery }
     }
   }
 
@@ -291,8 +348,8 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
   }
 
   // Queue a stored webhook for every peer (durable), then send.
-  function replicate(seq, headers, hop) {
-    const h = {}
+  function replicate(seq, headers, hop, source) {
+    const h = { ':source': source }
     for (const k of FORWARD_HEADERS) if (headers[k] != null) h[k] = String(headers[k])
     const json = JSON.stringify(h), t = Date.now()
     for (const peer of db.prepare('SELECT name, fail_count FROM peers').all()) {
@@ -344,41 +401,55 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
     }
   }
 
+  async function webhook(req, res, source) {
+    const src = SOURCES[source]
+    const raw = await readBody(req)
+    const ok = source === 'linear'
+      ? verifyLinearSignature(linearSecret, raw, req.headers['linear-signature'])
+      : verifySignature(webhookSecret, raw, req.headers['x-hub-signature-256'])
+    if (!ok) throw new HttpError(401, 'bad signature')
+    const delivery = req.headers[src.delivery]
+    const event = req.headers[src.event]
+    if (!delivery || !event) throw new HttpError(400, `missing ${source} headers`)
+    // A copy from a peer must also prove that its hop count and delivery id come from a peer.
+    let hop = 0
+    if (req.headers[HOP_HEADER] != null) {
+      hop = Number(req.headers[HOP_HEADER])
+      if (!Number.isInteger(hop) || hop < 1 || hop > MAX_HOPS) throw new HttpError(400, 'bad hop count')
+      if (!safeEqual(req.headers[PEER_SIG_HEADER], peerSignature(webhookSecret, { delivery, event, hop }, raw))) {
+        throw new HttpError(401, 'bad peer signature')
+      }
+    }
+    let payload
+    try { payload = JSON.parse(raw.toString('utf8')) } catch { throw new HttpError(400, 'payload must be JSON') }
+    // Linear's replay guard applies to first-hand deliveries; a peer's copy may be minutes old (outbox retries)
+    // and is covered by the peer signature and dedupe instead.
+    if (source === 'linear' && hop === 0 && !(Math.abs(clock() - Number(payload.webhookTimestamp)) <= LINEAR_MAX_SKEW_MS)) {
+      throw new HttpError(401, 'stale or missing webhookTimestamp')
+    }
+    const e = source === 'linear' ? extractLinear(String(event), payload) : extract(String(event), payload)
+    const r = insert.run(String(delivery), e.event, e.action, e.repo, e.issue, e.comment_id, e.author, e.title, e.body,
+      e.created_at, e.updated_at, now(), raw.toString('utf8'), e.parent_id ?? null, e.bot_actor ?? null)
+    const stored = r.changes > 0
+    if (stored) for (const w of [...waiters]) w()
+    log(`webhook ${source === 'linear' ? 'linear:' : ''}${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ` (forwarded, hop ${hop})` : ''}`)
+    // Relay on: a box's own webhook reaches the primary and through it the other boxes. Each server
+    // forwards a delivery once (only when it is new here), so the flood ends; the sender just answers 200.
+    if (stored && hop < MAX_HOPS) replicate(Number(r.lastInsertRowid), req.headers, hop + 1, source)
+    // Linear counts anything but 200 as a failed delivery.
+    return send(res, stored && source === 'github' ? 201 : 200, { stored, duplicate: !stored })
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, 'http://x')
     const route = `${req.method} ${url.pathname}`
 
     if (route === 'GET /healthz') return send(res, 200, { ok: true })
 
-    if (route === 'POST /webhook/github') {
-      const raw = await readBody(req)
-      if (!verifySignature(webhookSecret, raw, req.headers['x-hub-signature-256'])) {
-        throw new HttpError(401, 'bad signature')
-      }
-      const delivery = req.headers['x-github-delivery']
-      const event = req.headers['x-github-event']
-      if (!delivery || !event) throw new HttpError(400, 'missing GitHub headers')
-      // A copy from a peer must also prove that its hop count and delivery id come from a peer.
-      let hop = 0
-      if (req.headers[HOP_HEADER] != null) {
-        hop = Number(req.headers[HOP_HEADER])
-        if (!Number.isInteger(hop) || hop < 1 || hop > MAX_HOPS) throw new HttpError(400, 'bad hop count')
-        if (!safeEqual(req.headers[PEER_SIG_HEADER], peerSignature(webhookSecret, { delivery, event, hop }, raw))) {
-          throw new HttpError(401, 'bad peer signature')
-        }
-      }
-      let payload
-      try { payload = JSON.parse(raw.toString('utf8')) } catch { throw new HttpError(400, 'payload must be JSON') }
-      const e = extract(String(event), payload)
-      const r = insert.run(String(delivery), e.event, e.action, e.repo, e.issue, e.comment_id, e.author, e.title, e.body,
-        e.created_at, e.updated_at, now(), raw.toString('utf8'))
-      const stored = r.changes > 0
-      if (stored) for (const w of [...waiters]) w()
-      log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ` (forwarded, hop ${hop})` : ''}`)
-      // Relay on: a box's own webhook reaches the primary and through it the other boxes. Each server
-      // forwards a delivery once (only when it is new here), so the flood ends; the sender just answers 200.
-      if (stored && hop < MAX_HOPS) replicate(Number(r.lastInsertRowid), req.headers, hop + 1)
-      return send(res, stored ? 201 : 200, { stored, duplicate: !stored })
+    if (route === 'POST /webhook/github') return webhook(req, res, 'github')
+    if (route === 'POST /webhook/linear') {
+      if (!linearSecret) throw new HttpError(404, 'Linear webhooks are not configured (LINEAR_WEBHOOK_SECRET)')
+      return webhook(req, res, 'linear')
     }
 
     if (!url.pathname.startsWith('/api/')) throw new HttpError(404, 'not found')
@@ -522,7 +593,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     baseMs: num('PEER_RETRY_BASE_MS'), maxMs: num('PEER_RETRY_MAX_MS'), maxAttempts: num('PEER_RETRY_MAX_ATTEMPTS'),
     maxAgeMs: num('PEER_OUTBOX_MAX_AGE_H') && num('PEER_OUTBOX_MAX_AGE_H') * 3600000, maxRows: num('PEER_OUTBOX_MAX_ROWS'),
   }).filter(([, v]) => Number.isFinite(v) && v > 0))
-  const app = createApp({ db, webhookSecret: requireEnv('WEBHOOK_SECRET'), apiKey: requireEnv('API_KEY'), retry })
+  const app = createApp({ db, webhookSecret: requireEnv('WEBHOOK_SECRET'), apiKey: requireEnv('API_KEY'), linearSecret: process.env.LINEAR_WEBHOOK_SECRET || null, retry })
   const port = Number(process.env.PORT ?? 8787)
   const host = process.env.HOST ?? '0.0.0.0'
   const server = http.createServer(app)

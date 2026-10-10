@@ -11,6 +11,10 @@
 #   issue-channel.sh join <primary-url> [name]        replicate the primary's webhooks to this box (needs the
 #                                                     primary's .env here); `up` re-joins with the new URL
 #   issue-channel.sh leave | peers                    stop replicating / list this server's peers
+#   issue-channel.sh linear-login                     Linear OAuth login page behind a temporary quick tunnel; the
+#                                                     agent acts as you (tick "act as the app" to change that)
+#   issue-channel.sh linear-webhook <TEAM>            create a Linear webhook for team key <TEAM> (needs an admin
+#                                                     token in linear.env); stores LINEAR_WEBHOOK_SECRET, restarts
 #
 # State lives in $ISSUECHAN_STATE (default ~/.local/share/issue-channel):
 #   .env            WEBHOOK_SECRET, API_KEY (0600, never commit)
@@ -164,6 +168,50 @@ cmd_peers() {
         (.last_status // "-"), (.last_at // "-")]) | @tsv' | column -t -s $'\t'
 }
 
+# Linear: serve deploy/linear-login.mjs behind a throwaway quick tunnel at a secret path until one login succeeds.
+cmd_linear_login() {
+  load
+  local port="${LINEAR_LOGIN_PORT:-8795}" name=issue-channel-linear-login secret done url i pid
+  command -v node >/dev/null || die "node not found (Node 24 is needed for the login page)"
+  secret="$(openssl rand -hex 16)"; done="$(mktemp -u)"
+  d rm -f "$name" >/dev/null 2>&1 || true
+  d run -d --name "$name" --network host --user "$UIDGID" "$CF_IMAGE" tunnel --no-autoupdate --url "http://127.0.0.1:$port" >/dev/null
+  for i in $(seq 1 30); do url="$(d logs "$name" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)"; [[ -n $url ]] && break; sleep 1; done
+  [[ -n $url ]] || { d rm -f "$name" >/dev/null; die "quick tunnel did not start"; }
+  ISSUECHAN_STATE="$STATE" LOGIN_SECRET="$secret" PUBLIC_URL="$url" PORT="$port" DONE_FILE="$done" node "$HERE/linear-login.mjs" 2>/dev/null &
+  pid=$!
+  trap 'kill $pid 2>/dev/null; d rm -f '"$name"' >/dev/null 2>&1; rm -f "'"$done"'"' EXIT
+  for i in $(seq 1 40); do curl -fsS --max-time 3 -o /dev/null "$url/$secret/" 2>/dev/null && break; sleep 3; done
+  echo "callback URL (add it to the OAuth app): $url/$secret/callback"
+  echo "login page:                             $url/$secret/"
+  echo "waiting for the login (30 min max) ..."
+  for i in $(seq 1 360); do [[ -f $done ]] && break; sleep 5; done
+  [[ -f $done ]] || die "no login within 30 min"
+  echo "logged in (acting as: $(cut -d' ' -f1 "$done")); token stored in $STATE/linear.env"
+  if grep -q webhook-secret "$done"; then echo "LINEAR_WEBHOOK_SECRET saved; restarting the server to load it"; cmd_down >/dev/null; cmd_up; fi
+}
+
+# Linear: create (or reuse) a webhook pointing at /webhook/linear for one team, with a fresh signing secret.
+cmd_linear_webhook() {
+  load
+  local team="${1:-}" lenv="${ISSUECHAN_LINEAR_ENV_FILE:-$STATE/linear.env}" token url secret tid q
+  [[ -n "$team" ]] || die "usage: $0 linear-webhook <TEAM key, e.g. ENG>"
+  token="$(sed -n 's/^LINEAR_ACCESS_TOKEN=//p' "$lenv")"; [[ -n $token ]] && token="Bearer $token" || token="$(sed -n 's/^LINEAR_API_KEY=//p' "$lenv")"
+  [[ -n $token ]] || die "no Linear token in $lenv (log in first, see README: Linear)"
+  lgql() { curl -fsS https://api.linear.app/graphql -H "authorization: $token" -H 'content-type: application/json' -d "$1"; }
+  tid="$(lgql "$(jq -nc --arg k "$team" '{query: "query($k: String!) { teams(filter: {key: {eq: $k}}) { nodes { id name } } }", variables: {k: $k}}')" | jq -r '.data.teams.nodes[0].id // empty')"
+  [[ -n $tid ]] || die "Linear team $team not found"
+  url="$(public_url)/webhook/linear"
+  secret="$(sed -n 's/^LINEAR_WEBHOOK_SECRET=//p' "$STATE/.env")"
+  [[ -n $secret ]] || { secret="$(openssl rand -hex 32)"; printf 'LINEAR_WEBHOOK_SECRET=%s\n' "$secret" >> "$STATE/.env"; }
+  q='mutation($input: WebhookCreateInput!) { webhookCreate(input: $input) { success webhook { id url enabled } } }'
+  lgql "$(jq -nc --arg q "$q" --arg url "$url" --arg tid "$tid" --arg s "$secret" \
+    '{query: $q, variables: {input: {url: $url, teamId: $tid, resourceTypes: ["Comment", "Issue"], secret: $s, label: "issue-channel"}}}')" |
+    jq -e '.data.webhookCreate.success' >/dev/null || die "webhookCreate failed (admin scope needed)"
+  echo "Linear webhook for team $team -> $url; restarting the server to load LINEAR_WEBHOOK_SECRET"
+  cmd_down >/dev/null; cmd_up
+}
+
 cmd_down() { d rm -f "$SERVER" "$TUNNEL" >/dev/null 2>&1 || true; echo down; }
 
 cmd_status() {
@@ -214,7 +262,9 @@ case "${1:-}" in
   join) shift; cmd_join "$@" ;;
   leave) cmd_leave ;;
   peers) cmd_peers ;;
+  linear-login) cmd_linear_login ;;
+  linear-webhook) shift; cmd_linear_webhook "$@" ;;
   logs) shift; cmd_logs "$@" ;;
   webhook-add) shift; cmd_webhook_add "$@" ;;
-  *) sed -n '2,22p' "$0"; exit 1 ;;
+  *) sed -n '2,26p' "$0"; exit 1 ;;
 esac

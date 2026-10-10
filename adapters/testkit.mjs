@@ -13,6 +13,7 @@ import { openDb, createApp } from '../server/server.mjs'
 export const SECRET = 's'.repeat(40)
 export const KEY = 'k'.repeat(40)
 export const REPO = 'o/r'
+export const LINEAR_SECRET = 'l'.repeat(40)
 export const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 export async function until(fn, ms = 5000) {
@@ -21,7 +22,7 @@ export async function until(fn, ms = 5000) {
 }
 
 export async function startServer() {
-  const server = http.createServer(createApp({ db: openDb(':memory:'), webhookSecret: SECRET, apiKey: KEY, log: () => {} }))
+  const server = http.createServer(createApp({ db: openDb(':memory:'), webhookSecret: SECRET, apiKey: KEY, linearSecret: LINEAR_SECRET, log: () => {} }))
   await new Promise(r => server.listen(0, '127.0.0.1', r))
   const base = `http://127.0.0.1:${server.address().port}`
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'issuechan-test-'))
@@ -42,6 +43,23 @@ export async function startServer() {
       },
     })
     assert.ok(res.ok, `webhook ${res.status}`)
+    return id
+  }
+
+  // A signed Linear Comment webhook on ENG-<issue>. Returns the comment id.
+  async function linearComment(issue, body, { action = 'create', id = crypto.randomUUID(), parentId = null, email = 'me@example.com', botActor = null } = {}) {
+    const now = new Date().toISOString()
+    const raw = JSON.stringify({
+      action, type: 'Comment', actor: { id: 'u1', email }, webhookTimestamp: Date.now(),
+      data: { id, body, parentId, botActor, createdAt: now, updatedAt: now, user: botActor ? null : { id: 'u1', name: 'Me', email },
+        issue: { id: `iss-${issue}`, identifier: `ENG-${issue}`, title: 'Linear T', team: { key: 'ENG' } } },
+    })
+    const res = await fetch(`${base}/webhook/linear`, {
+      method: 'POST', body: raw,
+      headers: { 'linear-event': 'Comment', 'linear-delivery': crypto.randomUUID(), 'content-type': 'application/json',
+        'linear-signature': crypto.createHmac('sha256', LINEAR_SECRET).update(raw).digest('hex') },
+    })
+    assert.equal(res.status, 200, `linear webhook ${res.status}`)
     return id
   }
 
@@ -74,5 +92,5 @@ export async function startServer() {
   }
 
   const close = () => { server.close(); fs.rmSync(stateDir, { recursive: true, force: true }) }
-  return { base, stateDir, comment, api, registered, start, close }
+  return { base, stateDir, comment, linearComment, api, registered, start, close }
 }
