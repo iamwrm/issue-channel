@@ -4,6 +4,7 @@
 //   backup-issue.mjs ENG-123 | linear:ENG#123 | https://linear.app/<ws>/issue/ENG-123/...
 // Writes ~/.local/state/issue-channel/backups/backup-<owner>-<repo>-<n>-<ts>.json (GitHub) or
 // backup-linear-<ENG-123>-<ts>.json (Linear) and prints the path and the comment count.
+import { isMain } from '../../../core/entrypoint.mjs'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -48,4 +49,4 @@ async function main() {
   console.log(`${file}\n${count} comment(s)`)
 }
 
-if (import.meta.url === `file://${fs.realpathSync(process.argv[1])}`) main().catch(e => { console.error(`backup-issue.mjs: ${e.message}`); process.exit(1) })
+if (isMain(import.meta.url)) main().catch(e => { console.error(`backup-issue.mjs: ${e.message}`); process.exit(1) })
