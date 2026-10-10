@@ -145,6 +145,23 @@ Then say: *"create a new issue in <owner/repo> and listen to it"*. The repo need
 | `ISSUECHAN_DONE_REACTION` | `rocket`: replaces 👀 when the job is done (GitHub has no ✅ reaction); set it to empty to disable |
 | `ISSUECHAN_RESUME_DELAY_MS` | `3000`: after `--resume` or `/mcp` reconnect, how long auto-resume waits after the MCP `initialized` handshake before delivering, because Claude Code drops channel notifications that arrive before it registers its listener |
 
+### Agent skill
+
+[`skills/issue-channel/`](skills/issue-channel/SKILL.md) teaches an agent to work through issuechan reliably, on GitHub and Linear issues. It's the same `SKILL.md` format for Claude Code and Codex:
+
+| Part | What |
+|---|---|
+| `SKILL.md` | Refs, what to do with every delivery (answer where it came from; `done` and `comment_ids`, so finishing one request doesn't close another), listening (a new subscription starts from "now", so check for an unanswered `/bot`; one home issue per agent; `/bot <word>` targeting), writing (open items as a table, markers, attachments), and backing up before changing or deleting |
+| `reference/` | `consolidate.md` (the consolidation procedure, GitHub and Linear), `linear.md` (verified Linear behavior: threads, marker, admin, cascading deletes, webhooks), `ops.md` (which code runs, finding the channel process, reloading the channel or the session with herdr) |
+| `scripts/` | `backup-issue.mjs <ref>` (issue + all comments to `~/.local/state/issue-channel/backups/`), `linear.mjs` (`issue`, `comment`, `delete-comment`, `set-description`, `set-state`, `whoami`), `attachment.sh <url> <out>` (GitHub and Linear attachments with the right token) |
+
+Install it by linking it into the harness's skills directory (new sessions pick it up):
+
+```sh
+mkdir -p ~/.claude/skills && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.claude/skills/issue-channel   # Claude Code
+mkdir -p ~/.codex/skills  && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.codex/skills/issue-channel    # Codex
+```
+
 ### `/bot` rules
 
 - A **newly created** comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order. Edits never trigger, including edits of a `/bot` comment. They wait in the buffer for the next `/bot`.
