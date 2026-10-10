@@ -26,7 +26,7 @@ Follow-up to [`DESIGN.md`](DESIGN.md). Add Codex support to issue-channel throug
 
 ### Validate first
 - [ ] Two clients on one thread: does the `--remote` TUI render turns started or steered by the bridge?
-- [ ] Busy/idle/burst/long-idle matrix, as in the Claude validation in [`DESIGN.md`](DESIGN.md#validation-2026-10-08-claude-code-21284-via-clauded-tmux) (tmux).
+- [ ] Busy/idle/burst/long-idle matrix, as in the Claude validation in [`DESIGN.md`](DESIGN.md#validation-2026-10-08-claude-code-21284-via-claude-tmux) (tmux).
 - [ ] `unix://` socket transport (WebSocket is "experimental and unsupported").
 
 ### Fallback

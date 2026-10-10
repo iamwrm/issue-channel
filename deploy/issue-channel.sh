@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # Deploy issue-channel (server + Cloudflare tunnel) with plain docker, no compose.
 #
-#   issue-channel.sh init <hostname> [tunnel-name]   create state dir, secrets, tunnel config
+#   issue-channel.sh init <hostname> [tunnel-name]   named tunnel: create state dir, secrets, tunnel config
+#   issue-channel.sh init --quick                     quick tunnel: no Cloudflare account, random *.trycloudflare.com URL
 #   issue-channel.sh build                            build the server image
 #   issue-channel.sh up | down | restart | status | logs [server|tunnel]
-#   issue-channel.sh webhook-add <owner/repo>         register the GitHub webhook (gh CLI)
+#   issue-channel.sh url                              print the public URL
+#   issue-channel.sh webhook-add <owner/repo>         register the GitHub webhook (gh CLI); in quick mode
+#                                                     it also repoints an existing quick-tunnel webhook
 #
 # State lives in $ISSUECHAN_STATE (default ~/.local/share/issue-channel):
 #   .env            WEBHOOK_SECRET, API_KEY (0600, never commit)
-#   deploy.env      HOSTNAME, TUNNEL_NAME, TUNNEL_ID
-#   cloudflared.yml tunnel ingress config
+#   deploy.env      MODE (named|quick); named: HOSTNAME, TUNNEL_NAME, TUNNEL_ID
+#   cloudflared.yml tunnel ingress config (named mode)
 #   events.db       SQLite event log
-# The tunnel must already exist (`cloudflared tunnel create` + `tunnel route dns`);
+# A named tunnel must already exist (`cloudflared tunnel create` + `tunnel route dns`);
 # its credentials JSON is read from ~/.cloudflared/<TUNNEL_ID>.json.
+# A quick tunnel gets a new URL every time its container starts: run webhook-add again after up/restart.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,22 +38,43 @@ load() {
   [[ -f "$STATE/deploy.env" ]] || die "run: $0 init <hostname>"
   # shellcheck disable=SC1091
   source "$STATE/deploy.env"
+  MODE="${MODE:-named}"
+}
+
+# Public base URL. A quick tunnel logs its random URL once it is connected.
+public_url() {
+  if [[ $MODE == named ]]; then echo "https://$HOSTNAME"; return; fi
+  local url='' i
+  for i in $(seq 1 30); do
+    url="$(d logs "$TUNNEL" 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)" && [[ -n $url ]] && break
+    sleep 1
+  done
+  [[ -n $url ]] || die "quick tunnel URL not found; see: $0 logs tunnel"
+  echo "$url"
+}
+
+init_state() {
+  mkdir -p "$STATE"; chmod 700 "$STATE"
+  if [[ ! -f "$STATE/.env" ]]; then
+    (umask 077; printf 'WEBHOOK_SECRET=%s\nAPI_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > "$STATE/.env")
+    echo "generated secrets in $STATE/.env"
+  fi
 }
 
 cmd_init() {
   local host="${1:-}" name="${2:-issue-channel}"
-  [[ -n "$host" ]] || die "usage: $0 init <hostname> [tunnel-name]"
-  mkdir -p "$STATE"; chmod 700 "$STATE"
-  if [[ ! -f "$STATE/.env" ]]; then
-    umask 077
-    printf 'WEBHOOK_SECRET=%s\nAPI_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > "$STATE/.env"
-    echo "generated secrets in $STATE/.env"
+  if [[ "$host" == --quick ]]; then
+    init_state
+    printf 'MODE=quick\n' > "$STATE/deploy.env"
+    echo "configured a quick tunnel (URL assigned on up)"; return
   fi
+  [[ -n "$host" ]] || die "usage: $0 init <hostname> [tunnel-name] | init --quick"
+  init_state
   local id
   id="$(cf tunnel list --name "$name" --output json | jq -r '.[0].id // empty')"
   [[ -n "$id" ]] || die "tunnel '$name' not found; create it with: cloudflared tunnel create $name && cloudflared tunnel route dns $name $host"
   [[ -f "$CF_DIR/$id.json" ]] || die "missing tunnel credentials $CF_DIR/$id.json"
-  printf 'HOSTNAME=%s\nTUNNEL_NAME=%s\nTUNNEL_ID=%s\n' "$host" "$name" "$id" > "$STATE/deploy.env"
+  printf 'MODE=named\nHOSTNAME=%s\nTUNNEL_NAME=%s\nTUNNEL_ID=%s\n' "$host" "$name" "$id" > "$STATE/deploy.env"
   cat > "$STATE/cloudflared.yml" <<EOF
 tunnel: $id
 credentials-file: /etc/cloudflared/creds.json
@@ -71,11 +96,18 @@ cmd_up() {
   d run -d --name "$SERVER" --network "$NET" --restart unless-stopped \
     --user "$UIDGID" --env-file "$STATE/.env" -v "$STATE:/data" \
     -p 127.0.0.1:8787:8787 "$IMAGE" >/dev/null
-  d run -d --name "$TUNNEL" --network "$NET" --restart unless-stopped --user "$UIDGID" \
-    -v "$STATE/cloudflared.yml:/etc/cloudflared/config.yml:ro" \
-    -v "$CF_DIR/$TUNNEL_ID.json:/etc/cloudflared/creds.json:ro" \
-    "$CF_IMAGE" tunnel --config /etc/cloudflared/config.yml run >/dev/null
-  echo "up: local http://127.0.0.1:8787, public https://$HOSTNAME"
+  if [[ $MODE == quick ]]; then
+    d run -d --name "$TUNNEL" --network "$NET" --restart unless-stopped --user "$UIDGID" \
+      "$CF_IMAGE" tunnel --no-autoupdate --url "http://$SERVER:8787" >/dev/null
+  else
+    d run -d --name "$TUNNEL" --network "$NET" --restart unless-stopped --user "$UIDGID" \
+      -v "$STATE/cloudflared.yml:/etc/cloudflared/config.yml:ro" \
+      -v "$CF_DIR/$TUNNEL_ID.json:/etc/cloudflared/creds.json:ro" \
+      "$CF_IMAGE" tunnel --config /etc/cloudflared/config.yml run >/dev/null
+  fi
+  echo "up: local http://127.0.0.1:8787, public $(public_url)"
+  [[ $MODE == quick ]] && echo "quick tunnel: the URL is new, run: $0 webhook-add <owner/repo>"
+  return 0
 }
 
 cmd_down() { d rm -f "$SERVER" "$TUNNEL" >/dev/null 2>&1 || true; echo down; }
@@ -84,7 +116,7 @@ cmd_status() {
   load
   d ps -a --filter "name=issue-channel-" --format 'table {{.Names}}\t{{.Status}}'
   printf 'local  /healthz: '; curl -fsS http://127.0.0.1:8787/healthz || echo FAIL; echo
-  printf 'public /healthz: '; curl -fsS "https://$HOSTNAME/healthz" || echo FAIL; echo
+  printf 'public /healthz: '; curl -fsS "$(public_url)/healthz" || echo FAIL; echo
 }
 
 cmd_logs() {
@@ -98,10 +130,19 @@ cmd_logs() {
 cmd_webhook_add() {
   load
   local repo="${1:-}"; [[ -n "$repo" ]] || die "usage: $0 webhook-add <owner/repo>"
-  local url="https://$HOSTNAME/webhook/github" secret
+  local url secret old
+  url="$(public_url)/webhook/github"
   secret="$(sed -n 's/^WEBHOOK_SECRET=//p' "$STATE/.env")"
   if gh api "repos/$repo/hooks" --jq ".[] | select(.config.url == \"$url\") | .id" | grep -q .; then
     echo "webhook for $url already exists on $repo"; return
+  fi
+  if [[ $MODE == quick ]]; then
+    old="$(gh api "repos/$repo/hooks" --jq '.[] | select(.config.url | test("^https://[a-z0-9-]+\\.trycloudflare\\.com/webhook/github$")) | .id' | head -1)"
+    if [[ -n $old ]]; then
+      jq -n --arg url "$url" --arg secret "$secret" '{config: {url: $url, content_type: "json", secret: $secret, insecure_ssl: "0"}}' \
+        | gh api -X PATCH "repos/$repo/hooks/$old" --input - --jq '"repointed webhook \(.id) on '"$repo"' -> \(.config.url)"'
+      return
+    fi
   fi
   jq -n --arg url "$url" --arg secret "$secret" \
     '{name: "web", active: true, events: ["issues", "issue_comment"], config: {url: $url, content_type: "json", secret: $secret, insecure_ssl: "0"}}' \
@@ -115,7 +156,8 @@ case "${1:-}" in
   down) cmd_down ;;
   restart) cmd_down; cmd_up ;;
   status) cmd_status ;;
+  url) load; public_url ;;
   logs) shift; cmd_logs "$@" ;;
   webhook-add) shift; cmd_webhook_add "$@" ;;
-  *) sed -n '2,17p' "$0"; exit 1 ;;
+  *) sed -n '2,22p' "$0"; exit 1 ;;
 esac

@@ -1,11 +1,11 @@
 # issue-channel prompts
 
-Usage: type your topic or task, then paste one of these prompts after it. Run them in a Claude Code session started with `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`.
+Usage: type your topic or task, then paste one of these prompts after it. Replace `<owner/repo>` with your repo, and set `ISSUECHAN_DIR` to your issue-channel checkout (see the README quick start). Run them in a Claude Code session started with `claude --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`.
 
 ## Start: create an issue and listen to it
 
 ```text
-Create a new issue in iamwrm/mainbot for the topic above, subscribe to it with issuechan, check that the subscription is listed and the server health check passes (tell me to reconnect issuechan via /mcp if its tools are missing), then post a short welcome reply and give me the link.
+Create a new issue in <owner/repo> for the topic above, subscribe to it with issuechan, check that the subscription is listed and the server health check passes (tell me to reconnect issuechan via /mcp if its tools are missing), then post a short welcome reply and give me the link.
 ```
 
 ## Start: listen to an existing issue
@@ -31,19 +31,19 @@ Consolidate the whole subscribed issue, its description and every comment, by ca
 ## Launch a new agent on a new issue
 
 ```text
-Create a new issue in iamwrm/mainbot for the topic above, start a fresh agent listening to it with `projects/issue-channel/spawn/spawn-agent.sh` under a short session name you pick, and give me the issue link and the tab id.
+Create a new issue in <owner/repo> for the topic above, start a fresh agent listening to it with `$ISSUECHAN_DIR/spawn/spawn-agent.sh` under a short session name you pick, and give me the issue link and the tab id.
 ```
 
 ## Replace myself with an edited-context successor
 
 ```text
-Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node projects/issue-channel/session-fork/session-fork.mjs mirror $CLAUDE_CODE_SESSION_ID`, write a plan that replaces or drops the turns that are no longer needed and ends with a handoff note, fork it, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork with `projects/issue-channel/spawn/spawn-agent.sh --resume <fork id>`, and tell me on the issue once it is listening.
+Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror $CLAUDE_CODE_SESSION_ID`, write a plan that replaces or drops the turns that are no longer needed and ends with a handoff note, fork it, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork with `$ISSUECHAN_DIR/spawn/spawn-agent.sh --resume <fork id>`, and tell me on the issue once it is listening.
 ```
 
 ## Dispatch to another issue
 
 ```text
-Dispatch the task above to a worker agent: create a new issue in iamwrm/mainbot for it, fork your session with `projects/issue-channel/session-fork/session-fork.mjs` keeping only the turns the worker needs plus a note describing the task, start the fork on the new issue with `projects/issue-channel/spawn/spawn-agent.sh --resume <fork id> --task <the task>` under its own session name, and give me the issue link.
+Dispatch the task above to a worker agent: create a new issue in <owner/repo> for it, fork your session with `$ISSUECHAN_DIR/session-fork/session-fork.mjs` keeping only the turns the worker needs plus a note describing the task, start the fork on the new issue with `$ISSUECHAN_DIR/spawn/spawn-agent.sh --resume <fork id> --task <the task>` under its own session name, and give me the issue link.
 ```
 
 ## Wrap up

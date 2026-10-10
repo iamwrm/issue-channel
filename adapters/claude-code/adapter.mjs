@@ -1,5 +1,5 @@
 // Claude Code adapter: deliveries are Claude Code channel notifications.
-// Launch: clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan
+// Launch: claude --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan
 
 export default {
   name: 'claude-code',

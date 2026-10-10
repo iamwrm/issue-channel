@@ -3,16 +3,18 @@
 #
 # The launch rules live here so agents don't have to remember them:
 #   - only in a new herdr tab (never a split pane, tmux or a background shell)
-#   - only `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`
-#     (never plain `claude`, never `-p`, which can't load channels)
+#   - only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`
+#     (ISSUECHAN_LAUNCHER defaults to `claude`; set it to a wrapper if you use one. Never `-p`, which can't load channels)
 #
 # Usage: spawn-agent.sh --name <name> --issue <owner/repo#n> [--resume <session-id>]
 #                       [--task <text>] [--cwd <dir>] [--timeout <s>]
 # Prints JSON: {"name", "tab", "pane", "issue", "reply"}.
 set -euo pipefail
 
+launcher=${ISSUECHAN_LAUNCHER:-claude}
+
 die() { echo "spawn-agent: $*" >&2; exit 1; }
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 name='' issue='' resume='' task='' cwd=$PWD timeout=180
 while (($#)); do
@@ -29,7 +31,7 @@ while (($#)); do
 done
 
 [[ ${HERDR_ENV:-} == 1 ]] || die "not running inside a herdr pane (HERDR_ENV != 1)"
-for bin in herdr clauded gh jq; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
+for bin in herdr "$launcher" gh jq; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
 [[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "--name must match [a-z][a-z0-9_-]{0,31}"
 [[ $issue =~ ^([^/#[:space:]]+/[^/#[:space:]]+)#([0-9]+)$ ]] || die "--issue must look like owner/repo#123"
 repo=${BASH_REMATCH[1]} number=${BASH_REMATCH[2]}
@@ -43,7 +45,7 @@ created=$(herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd "$cwd" --labe
 tab=$(jq -r .result.tab.tab_id <<<"$created") pane=$(jq -r .result.root_pane.pane_id <<<"$created")
 [[ $tab == w* && $pane == w* ]] || die "tab create failed: $created"
 
-cmd='clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan'
+cmd="$launcher"' --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan'
 [[ -n $resume ]] && cmd+=" --resume $resume"
 herdr pane run "$pane" "$cmd" >/dev/null
 
@@ -61,7 +63,7 @@ while :; do
   elif grep -q 'Enter to confirm' <<<"$s"; then
     die "unknown startup dialog in pane $pane, answer it by hand:"$'\n'"$s"
   fi
-  ((SECONDS < deadline)) || die "clauded did not become ready in pane $pane:"$'\n'"$s"
+  ((SECONDS < deadline)) || die "$launcher did not become ready in pane $pane:"$'\n'"$s"
   # Wait until the screen changes (or a short timeout) before looking again.
   herdr pane wait-output "$pane" --regex 'bypass permissions on|Enter to confirm' --timeout 2000 >/dev/null 2>&1 || true
 done

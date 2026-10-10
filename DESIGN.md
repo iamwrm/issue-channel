@@ -40,7 +40,7 @@ Turn a GitHub issue into a two-way chat channel with a running Claude Code agent
 Claude Code [channels](https://code.claude.com/docs/en/channels-reference) are used, not Stop/asyncRewake hooks. A channel is a stdio MCP server that Claude Code spawns and keeps alive for the whole session. It declares `capabilities.experimental['claude/channel']` and emits `notifications/claude/channel` events.
 
 - The **issuechan MCP server** (`core/issuechan.mjs`, run for Claude Code by `adapters/claude-code/channel.mjs`) long-polls the issue-channel server with this session's cursor. Each `/bot` batch becomes one notification: `content` holds the comments and `meta` holds `{repo, issue, seq, author, edited}`. Its `instructions` string explains the `<channel source="issuechan">` tag and the reply convention.
-- **Launch:** `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`. Custom channels aren't on the research-preview allowlist. The flag shows a confirmation screen and only works in interactive sessions, not `-p`. Keep the channel's MCP SDK on a protocol revision older than `2026-07-28` (or set `MCP_PROTOCOL_NEGOTIATION=legacy`), otherwise the channel does not register.
+- **Launch:** `claude --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`. Custom channels aren't on the research-preview allowlist. The flag shows a confirmation screen and only works in interactive sessions, not `-p`. Keep the channel's MCP SDK on a protocol revision older than `2026-07-28` (or set `MCP_PROTOCOL_NEGOTIATION=legacy`), otherwise the channel does not register.
 - **Trust note (required):** Claude Code labels a channel message that arrives *mid-turn* as external input. Without guidance, Claude declined to act on it (2 of 2 tests). The user's `CLAUDE.md` must state that `issuechan` is the user's own authenticated input path ([`adapters/claude-code/CLAUDE.snippet.md`](adapters/claude-code/CLAUDE.snippet.md)). The note is safe only because the server checks the webhook signature and the channel checks a commenter allowlist before anything reaches the session.
 - **Session routing:** `/bot` goes to the default (or only) listener on the issue. `/bot <session_name>` targets a named session. Cursors and subscriptions are kept per session.
 
@@ -52,7 +52,7 @@ Claude Code [channels](https://code.claude.com/docs/en/channels-reference) are u
                          listener + file queue
  re-arming               after every wake          none
  long idle               listener dies at timeout  lives with the session
- clauded launcher        ⚠ "third-party hooks,     no warning
+ claude wrapper          ⚠ "third-party hooks,     no warning
                            ban risk"
  framing                 "Stop hook blocking       <channel source=…>
                           error…"                  queued message
@@ -60,7 +60,7 @@ Claude Code [channels](https://code.claude.com/docs/en/channels-reference) are u
 
 Fallback if channels become unavailable (org policy or a preview change): an `asyncRewake` listener hook, re-armed from `SessionStart`/`UserPromptSubmit`/`PostToolBatch`/`Stop` with a `flock`, using a large `timeout`.
 
-#### Validation (2026-10-08, Claude Code 2.1.284 via `clauded`, tmux)
+#### Validation (2026-10-08, Claude Code 2.1.284 via `claude`, tmux)
 
 | Case | asyncRewake | Channel |
 |---|---|---|
@@ -93,6 +93,7 @@ Neither mechanism interrupts a running tool or a streaming reply. A message land
 
 ## History
 
-- Implemented in `81bd3d9` and deployed at `https://issue-channel.example.com` (server + `cloudflared` containers), with the webhook registered on `iamwrm/mainbot`. Validated end to end on #11: idle wake, mid-turn steer, comment edits and the bot-marker self-filter.
-- Reactions, `issue_reply`, auto-resubscribe and edit diffs: `63d7d33` (developed live on #12).
-- Prior art: `stop_hook_poller/`, a session-scoped Stop-hook wait for Codex, was removed in `29a29ef` (#13). Codex support is now planned as an app-server bridge (see BACKLOG.md).
+- Developed inside the owner's orchestrator repo; commit ids below are from this repo's (extracted) history.
+- Implemented in `463aee9` and deployed at `https://issue-channel.example.com` (server + `cloudflared` containers), with the webhook registered on the owner's orchestrator repo. Validated end to end there (issue #11): idle wake, mid-turn steer, comment edits and the bot-marker self-filter.
+- Reactions, `issue_reply`, auto-resubscribe and edit diffs: `569de33` (developed live on #12).
+- Prior art: `stop_hook_poller/`, a session-scoped Stop-hook wait for Codex, was removed in `d50a97c` (#13). Codex support is now planned as an app-server bridge (see BACKLOG.md).

@@ -1,18 +1,18 @@
 # session-fork: CLM-style context editing for Claude Code
 
-Fork a Claude Code session log into an **edited copy** and start a new session from it with `clauded --resume <id>`. It serves two uses:
+Fork a Claude Code session log into an **edited copy** and start a new session from it with `claude --resume <id>`. It serves two uses:
 
 1. **Context cleanup:** an agent replaces itself with a successor whose history is trimmed and summarized.
 2. **Dispatch:** an agent hands a job to a worker that starts with only the context it needs, listening on its own issue.
 
 The idea comes from [Context Language Models](https://github.com/facebookresearch/context-language-models) and [lolipopshock/pi-clm](https://github.com/lolipopshock/pi-clm): the context is a file that the model edits, and the edited version becomes its next input. pi-clm does this live inside Pi on every request. Claude Code has no extension point for that, so here the edit happens **between sessions**: the agent edits a copy of its own session log, and a new session resumes the copy.
 
-The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Replace myself with an edited-context successor" and "Dispatch to another issue". Active work is tracked in [#14](https://github.com/iamwrm/mainbot/issues/14).
+The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Replace myself with an edited-context successor" and "Dispatch to another issue". Active work is tracked in [#14](https://github.com/owner/repo/issues/14).
 
 ## How it works
 
 ```
- PARENT  clauded session A  (herdr pane 1)            ~/.claude/projects/<cwd>/A.jsonl
+ PARENT  claude session A  (herdr pane 1)            ~/.claude/projects/<cwd>/A.jsonl
  ┌──────────────────────────────────────┐             ┌──────────────────────────────┐
  │ turn 1  human: subscribe to #12      │──appends───►│ user ─► assistant ─► tool... │
  │ turn 2  /bot commit                  │             │   (chain linked by           │
@@ -51,7 +51,7 @@ The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Replace
      cc-A.json ──copy cursor + open /bot requests──► cc-B.json       │
      (parent then calls issue_unsubscribe)                           │
                                                                      ▼ ⑤ resume
- CHILD   herdr pane 2:  clauded --dangerously-skip-permissions \
+ CHILD   herdr pane 2:  claude --dangerously-skip-permissions \
                           --dangerously-load-development-channels server:issuechan \
                           --resume B
  ┌──────────────────────────────────────┐
@@ -95,7 +95,7 @@ Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs
     { "op": "replace", "from": 2, "to": 4, "note": "Summary of turns 2-4: ..." },
     { "op": "drop", "from": 6, "to": 6 }
   ],
-  "note": "You are the successor of session A on iamwrm/mainbot#12. ..."
+  "note": "You are the successor of session A on owner/repo#12. ..."
 }
 ```
 - Ranges are inclusive. A turn may appear in only one op, and turn 0 can't be edited.
@@ -112,7 +112,7 @@ Turn 0 is the preamble. A turn starts at each prompt (typed or channel) and runs
 
 ## Spawning the child
 
-Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. It starts the fork in a new herdr tab with the only allowed launch command (`clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`), answers the startup dialogs, names the agent, has it subscribe under that session name, and checks its "listening" reply.
+Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. It starts the fork in a new herdr tab with the only allowed launch command (`claude --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`), answers the startup dialogs, names the agent, has it subscribe under that session name, and checks its "listening" reply.
 
 - A fork has a new `CLAUDE_CODE_SESSION_ID`, so it starts with **no** subscriptions unless `handoff` copied them.
 - With several agents on one issue, each needs its own session name, so that `/bot <name>` reaches the right one.
@@ -126,7 +126,7 @@ Use [`../spawn/spawn-agent.sh`](../spawn/README.md) with `--resume <fork id>`. I
 ## Live test (2026-10-09)
 
 1. `mirror` of the #12 session showed 6 turns. The plan replaced turns 2–4 with a one-line summary plus a canary word, `PERIWINKLE`. It dropped turn 6 and appended "you are a forked copy, don't post on GitHub". The estimate went from ~121k to ~54k tokens.
-2. In a new herdr split: `clauded --dangerously-skip-permissions --resume <fork id>`. It loaded at once, with the plan's title as its session name.
+2. In a new herdr split: `claude --dangerously-skip-permissions --resume <fork id>`. It loaded at once, with the plan's title as its session name.
 3. Asked from memory, with no tools allowed:
 
 | Question | Where the answer was | Child's answer |
@@ -155,7 +155,7 @@ Bugs found (fixed afterwards, see the rerun below):
 - **A delivery at child startup is dropped.** The child's auto-resume replayed canary-5 right after connecting, before "Channel notifications registered". Claude Code never showed it, yet the channel counted it as delivered: cursor 362, comment in `open_requests`. canary-5 was handled only because of the bug above, and because the child looked up its open requests by hand. Fix idea: delay the first delivery until the channel is registered, or re-deliver open requests on the first poll.
 - **Stale session registration.** The copied state carried `session: rmparent`, so the child registered on the server as `rmparent`. The later `issue_subscribe(session=rmchild)` took the "already subscribed" path, which skips the server `PUT`, so the server still listed only `rmparent`. `/bot rmchild …` still worked, because an unknown one-word target counts as untargeted, but `/bot rmparent …` would also reach the child. The child's own `issue_unsubscribe` then deleted only `rmchild`, which left an orphaned `rmparent` row that had to be removed by hand. Fix idea: on a session rename, re-register (`PUT` the new name, `DELETE` the old one).
 
-### Rerun after the fixes ([`b112f2b`](https://github.com/iamwrm/mainbot/commit/b112f2b), 2026-10-09)
+### Rerun after the fixes (`3c32c29`, 2026-10-09)
 
 This was the same unattended run on throwaway #25 (deleted afterwards), with 8 canaries and the codeword `LAVENDER-25` / `8821`.
 
@@ -167,7 +167,7 @@ This was the same unattended run on throwaway #25 (deleted afterwards), with 8 c
 
 ## Usage accounting (ccusage)
 
-Copied assistant replies lose their `requestId` and get `usage` with every number set to 0, while `message.id` is kept. So `npx ccusage` counts them as 0 for the fork and keeps crediting them to the parent, and a fork shows up only once it makes its own requests. Before this ([PR #17](https://github.com/iamwrm/mainbot/pull/17)), totals were already correct, because ccusage dedupes on `message.id` + `requestId`. But `ccusage session` credited each duplicate to whichever log it read first, so a fork took over ~881k tokens (~$0.54) of the parent's usage in the live test.
+Copied assistant replies lose their `requestId` and get `usage` with every number set to 0, while `message.id` is kept. So `npx ccusage` counts them as 0 for the fork and keeps crediting them to the parent, and a fork shows up only once it makes its own requests. Before this ([PR #17](https://github.com/owner/repo/pull/17)), totals were already correct, because ccusage dedupes on `message.id` + `requestId`. But `ccusage session` credited each duplicate to whichever log it read first, so a fork took over ~881k tokens (~$0.54) of the parent's usage in the live test.
 
 The cost is that Claude Code reads the last reply's `usage` as a context-size hint until the fork's first request. For a fork, that number described the parent's larger context anyway.
 

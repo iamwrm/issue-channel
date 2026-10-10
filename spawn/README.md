@@ -2,9 +2,11 @@
 
 Start a Claude Code agent in a new herdr tab and have it listen to a GitHub issue through issuechan. One command, with the launch rules built in, so an agent can't start Claude Code the wrong way.
 
+It needs the herdr pane manager (`herdr` in `PATH`, run from inside a herdr pane). It is optional: the server and the issuechan channel work without it. Set `ISSUECHAN_DIR` to your issue-channel checkout to use the paths below.
+
 ```sh
-projects/issue-channel/spawn/spawn-agent.sh --name worker1 --issue iamwrm/mainbot#42
-projects/issue-channel/spawn/spawn-agent.sh --name worker1 --issue iamwrm/mainbot#42 --resume <fork id> --task "..."
+$ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42
+$ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42 --resume <fork id> --task "..."
 ```
 
 Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the URL of the agent's "listening" comment.
@@ -21,7 +23,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the
 ## What it enforces
 
 - It runs only inside herdr (`HERDR_ENV=1`) and always uses a **new** tab in the caller's workspace, labelled with the agent name (`--no-focus`). It never splits a pane (split panes keep shrinking as agents pile up) and never uses tmux or a background shell.
-- It launches only `clauded --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan [--resume <id>]`: never plain `claude` and never `-p`, because `-p` can't load channels.
+- It launches only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan [--resume <id>]`, never with `-p`, because `-p` can't load channels. `ISSUECHAN_LAUNCHER` defaults to `claude`; set it if you start Claude Code through a wrapper.
 - It answers only known startup dialogs:
   - the dev-channel warning ("I am using this for local development", preselected)
   - "trust this folder" ("Yes, I trust this folder", preselected)
@@ -31,7 +33,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the
 
 ## Steps
 
-1. Create a tab (`herdr tab create --label <name> --no-focus`) and run the `clauded` command in its root pane.
+1. Create a tab (`herdr tab create --label <name> --no-focus`) and run the `claude` command in its root pane.
 2. Clear the startup dialogs until the prompt footer (`bypass permissions on`) shows.
 3. `herdr agent rename <pane> <name>`.
 4. `herdr agent prompt <name> --wait`: subscribe with `session=<name>`, check `issue_subscriptions`, and post a "listening" reply (`done=false`).
@@ -43,7 +45,7 @@ Teardown: `herdr agent prompt <name> "Unsubscribe from the issue"`, then `herdr 
 
 On a throwaway issue (#18, now closed):
 - **Spawn:** `--name spawntest`. The dev-channel dialog was answered, and the agent was listening with its reply posted in **22 s**.
-- **Routing:** `/bot spawntest ping` reached the child. It replied "pong: session spawntest, listening to iamwrm/mainbot#18", and the comment went 👀 → 🚀.
+- **Routing:** `/bot spawntest ping` reached the child. It replied "pong: session spawntest, listening to owner/repo#18", and the comment went 👀 → 🚀.
 - **Teardown:** the child unsubscribed (`issue_subscriptions` came back empty), and the pane was closed.
 
 Re-tested after the switch to tabs (2026-10-09, throwaway #21, now closed): `--name tabtest` opened its own tab (`w2:tH`) and left the caller's tab with the same pane count. The listening reply was posted in **25 s**, and the tab was closed after the test.
