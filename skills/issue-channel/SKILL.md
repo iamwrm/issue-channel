@@ -30,6 +30,7 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 ## Listening
 
 - `issue_subscribe` starts from **now**: comments posted before it are never delivered. Right after subscribing to an existing issue, read its recent comments (`gh issue view N --comments`, or `scripts/linear.mjs issue ENG-123`) and answer any `/bot` nobody answered yet.
+- **Linear issue you listen to = In Progress.** When the user asks you to create a Linear issue to listen to, create it already in that state: `scripts/linear.mjs create ENG --title "…" --description "…" --state in-progress`, then `issue_subscribe`. When the user asks you to listen to an existing Linear issue, subscribe and then `scripts/linear.mjs set-state ENG-123 in-progress` (unless it is already started or closed: then leave it and say so). Mention the state in your reply.
 - **Home issue:** each agent keeps one long-lived issue (label `bot`) as its inbox, never closed when a task is done; work topics get their own issues, where results and decisions go. One home per agent. Subscribe under a session name equal to the home's name so `/bot <name>` reaches you anywhere.
 - `/bot <word>` with a single word on the first line targets the session `<word>`; an unknown word counts as untargeted. `/bot done` is therefore untargeted: read it as text.
 - `issue_subscriptions` shows what you listen to, with open request ids per issue.
@@ -50,7 +51,7 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 ## Linear quick facts
 
 - The agent acts as the user by default (`LINEAR_ACTOR=user` in `linear.env`): its replies, 👀 and ✅ show as the user, and Linear doesn't notify the user about them. The marker keeps them out of your own input.
-- `scripts/linear.mjs` covers what the MCP tools don't: `issue`, `comment`, `delete-comment`, `set-description`, `set-state`, `whoami`.
+- `scripts/linear.mjs` covers what the MCP tools don't: `create`, `issue`, `comment`, `edit-comment`, `delete-comment`, `set-description`, `set-state`, `whoami`. Don't hand-write GraphQL for these.
 - More in [reference/linear.md](reference/linear.md).
 
 ## Operating the channel
