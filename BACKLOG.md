@@ -34,6 +34,20 @@ A Codex hook-based provider: a Stop hook that long-polls the issue-channel serve
 
 Refs: https://learn.chatgpt.com/docs/app-server · https://learn.chatgpt.com/docs/hooks
 
+## Codex GUI live test (managed daemon)
+
+The Codex adapter supports the managed app-server daemon that the Codex GUI and ChatGPT Remote attach to (#31, setup in [`adapters/codex/README.md`](adapters/codex/README.md#with-the-codex-gui-managed-daemon)). It has been checked live against a real `codex app-server`, but not with the GUI itself (#22, item 3).
+
+| Step | What | Pass if |
+|---|---|---|
+| 1 | Merge #31, or check out `codex-managed-daemon` (the config points at the main checkout) | — |
+| 2 | Add the `[mcp_servers.issuechan]` block from the README to `~/.codex/config.toml`, then `codex app-server daemon restart` | The daemon is up again (`codex app-server daemon version`) |
+| 3 | Attach the GUI to this box (Remote SSH), open a thread, ask the agent to `issue_subscribe` | Listening reply tagged `codex:<id8>` |
+| 4 | Post a `/bot` while the agent is idle | The GUI shows it live as a user message and the agent replies |
+| 5 | Post a `/bot` while the agent is busy (e.g. running `sleep 25`) | Steered into the running turn and shown live, as in the TUI test (#29) |
+| 6 | Optional: trigger an approval in the GUI | Your click decides it; issuechan no longer declines it first |
+| 7 | Optional: `codex app-server daemon restart`, reopen the thread, post a `/bot` | Delivered without asking the agent to subscribe again |
+
 
 ## Hardening
 

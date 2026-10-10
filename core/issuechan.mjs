@@ -24,6 +24,9 @@ function readEnvFile(file) {
 //   agentEnv       [[agentTag, ENV_VAR]]: where the harness puts its session id (ISSUECHAN_AGENT_ID overrides)
 //   agentFromCall  optional (callParams) => { agent, id } | null: for harnesses that pass the session id
 //                  only with tool calls; the first call that yields one binds this process to it
+//   onBind         optional (agent, { stateDir }): called when a tool call binds the process
+//   agentAtStart   optional async ({ stateDir }) => { agent, id } | null: bind before any tool call
+//                  (e.g. after a harness restart), so saved subscriptions auto-resume
 //   capabilities   extra MCP server capabilities (e.g. Claude Code's channel capability)
 //   arrival        first sentence of the instructions: how deliveries show up in the session
 //   resumeDelayMs  default wait after `initialized` before auto-resume may deliver
@@ -158,9 +161,13 @@ export async function runIssuechan(adapter) {
   mcp.setRequestHandler(CallToolRequestSchema, async req => {
     const a = req.params.arguments ?? {}
     const text = t => ({ content: [{ type: 'text', text: t }] })
-    if (!AGENT && adapter.agentFromCall) {
-      AGENT = adapter.agentFromCall(req.params)
-      if (AGENT) log(`bound to ${AGENT.agent}:${AGENT.id}`)
+    if (adapter.agentFromCall) {
+      const a = adapter.agentFromCall(req.params)
+      if (a && !AGENT) {
+        AGENT = a
+        log(`bound to ${AGENT.agent}:${AGENT.id}`)
+        adapter.onBind?.(AGENT, { stateDir: STATE_DIR })
+      } else if (a && a.id !== AGENT?.id) log(`tool call from ${a.agent}:${a.id}, but bound to ${AGENT.agent}:${AGENT.id}`)
     }
     try {
       if (req.params.name === 'issue_subscribe') {
@@ -360,7 +367,16 @@ export async function runIssuechan(adapter) {
   const initialized = new Promise(r => { mcp.oninitialized = r })
   await mcp.connect(new StdioServerTransport())
   log(`connected (${adapter.name}); server=${BASE_URL} session=${session} agent=${AGENT ? `${AGENT.agent}:${AGENT.id}` : '-'}`)
-  initialized.then(() => new Promise(r => setTimeout(r, RESUME_DELAY_MS))).then(autoResume)
+  initialized.then(() => new Promise(r => setTimeout(r, RESUME_DELAY_MS))).then(bindAtStart).then(autoResume)
+
+  async function bindAtStart() {
+    if (AGENT || !adapter.agentAtStart) return
+    const a = await adapter.agentAtStart({ stateDir: STATE_DIR }).catch(e => { log(`bind at start: ${e.message}`); return null })
+    if (a && !AGENT) { // a tool call may have bound meanwhile; it wins
+      AGENT = a
+      log(`bound at start to ${AGENT.agent}:${AGENT.id}`)
+    }
+  }
 
   // Restore this agent session's subscriptions (after /mcp reconnect or --resume).
   async function autoResume() {

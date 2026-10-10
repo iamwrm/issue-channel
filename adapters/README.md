@@ -7,6 +7,7 @@ issuechan is one MCP server (`core/issuechan.mjs`) with the same tools for every
 | who | `agentEnv`: `[[agentTag, ENV_VAR]]` holding the session id (reply tag, state file name), or `agentFromCall(params)` when the harness passes it only with tool calls | `cc` ← `CLAUDE_CODE_SESSION_ID` | `codex` ← the first tool call's `_meta.threadId` |
 | how | `deliver(mcp, { content, meta }, { agent })`: push one `/bot` delivery into the session; throw to have the core retry it | `notifications/claude/channel` | app-server `turn/start` / `turn/steer` |
 | setup | `capabilities`, `arrival` (first instructions sentence), `resumeDelayMs` | `claude/channel` capability, `<channel source="issuechan">`, 3000 ms | none, "arrives as a user message", 0 |
+| binding (optional) | `onBind(agent, { stateDir })` after a tool call binds; `agentAtStart({ stateDir })` to bind before any tool call, so saved subscriptions auto-resume | — | claims the thread; after an app-server restart, binds to the one unclaimed loaded thread in its cwd |
 
 The rest (polling, `/bot` parsing and routing, edit diffs, state files, replies and 👀/🚀) lives in `core/` and must stay harness-neutral.
 

@@ -52,16 +52,16 @@ export async function startServer() {
   const registered = async issue =>
     (await api('GET', `/api/subscriptions?repo=${encodeURIComponent(REPO)}&issue=${issue}`)).subscriptions.map(s => s.session).sort()
 
-  // Start an adapter entry as an MCP server; `env` adds harness-specific variables.
+  // Start an adapter entry as an MCP server; `env` adds harness-specific variables, `cwd` sets its directory.
   // Collects Claude Code channel notifications in `got` (other harnesses deliver out of band).
-  async function start(entry, env = {}) {
+  async function start(entry, env = {}, { cwd } = {}) {
     const client = new Client({ name: 'test', version: '0' }, { capabilities: {} })
     const got = []
     client.fallbackNotificationHandler = async n => {
       if (n.method === 'notifications/claude/channel') got.push({ at: Date.now(), ...n.params })
     }
     const transport = new StdioClientTransport({
-      command: process.execPath, args: [entry], stderr: 'ignore',
+      command: process.execPath, args: [entry], stderr: 'ignore', cwd,
       env: {
         PATH: process.env.PATH, ISSUECHAN_URL: base, ISSUECHAN_API_KEY: KEY, ISSUECHAN_STATE_DIR: stateDir,
         ISSUECHAN_ALLOWED_AUTHORS: 'me', ISSUECHAN_REACTION: '', ISSUECHAN_DONE_REACTION: '', ...env,
