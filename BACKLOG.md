@@ -54,3 +54,7 @@ The Codex adapter supports the managed app-server daemon that the Codex GUI and 
 - Pin the `cloudflare/cloudflared` image version in `deploy/issue-channel.sh` instead of `:latest`.
 - The `regex` filter runs patterns sent by API-key holders. Add a length cap or a timeout to avoid catastrophic backtracking.
 - Live-test `/bot <name>` targeting between two concurrent sessions.
+
+## restart-agent.sh for other harnesses
+
+`spawn/restart-agent.sh` (restart in place, optionally into a CLM-compacted fork) supports Claude Code only. Add **Codex** and **pi**: per harness, how to exit and resume a session in a pane, where its session log lives (for compaction a session-fork equivalent is needed), its startup dialogs, and how to find its issuechan process. Requested on Linear REN-108.
