@@ -11,6 +11,12 @@ const MAX_BODY = 5 * 1024 * 1024
 // Cloudflare closes proxied requests that send no response for ~100s, so cap waits below that.
 const MAX_WAIT_S = 90
 const MAX_LIMIT = 500
+// Forwarded webhooks carry this header; a server never forwards them again.
+const HOP_HEADER = 'x-issue-channel-hop'
+const FORWARD_HEADERS = ['content-type', 'user-agent', 'x-github-event', 'x-github-delivery', 'x-github-hook-id',
+  'x-github-hook-installation-target-id', 'x-github-hook-installation-target-type', 'x-hub-signature', 'x-hub-signature-256']
+const PEER_TIMEOUT_MS = 10000
+const PEER_SUBS_TIMEOUT_MS = 3000
 
 export function openDb(dbPath) {
   if (dbPath !== ':memory:') fs.mkdirSync(path.dirname(dbPath), { recursive: true })
@@ -42,6 +48,13 @@ export function openDb(dbPath) {
       session TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (repo, issue, session)
+    );
+    CREATE TABLE IF NOT EXISTS peers (
+      name TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_at TEXT,
+      last_status TEXT
     );
   `)
   db.function('regexp', { deterministic: true }, (pattern, value) => {
@@ -128,7 +141,15 @@ export class HttpError extends Error {
 
 const SUMMARY_COLS = 'seq, delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at'
 
-export function createApp({ db, webhookSecret, apiKey, now = () => new Date().toISOString(), log = console.error }) {
+export function normalizePeerUrl(u) {
+  let url
+  try { url = new URL(String(u)) } catch { throw new HttpError(400, 'url must be an absolute http(s) URL') }
+  if (!['http:', 'https:'].includes(url.protocol) || url.search || url.hash) throw new HttpError(400, 'url must be an absolute http(s) URL without query')
+  return url.origin + url.pathname.replace(/\/+$/, '')
+}
+
+export function createApp({ db, webhookSecret, apiKey, now = () => new Date().toISOString(), log = console.error,
+  fetch = globalThis.fetch, forwardRetryMs = [2000, 10000, 30000, 60000, 120000] }) {
   if (!webhookSecret || !apiKey) throw new Error('webhookSecret and apiKey are required')
   const waiters = new Set()
   const insert = db.prepare(`
@@ -150,6 +171,45 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
     const rows = db.prepare(`SELECT ${cols} FROM events WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`).all(...params, n)
     if (include_payload) for (const r of rows) r.payload = JSON.parse(r.payload)
     return rows
+  }
+
+  const listPeers = () => db.prepare('SELECT name, url, updated_at, last_at, last_status FROM peers ORDER BY name').all()
+  const setPeerStatus = db.prepare('UPDATE peers SET last_at = ?, last_status = ? WHERE name = ?')
+
+  // Replicate a webhook to every peer as the same HTTP request; the peer checks the signature itself.
+  async function forward(peer, raw, headers, delivery) {
+    const h = { [HOP_HEADER]: '1' }
+    for (const k of FORWARD_HEADERS) if (headers[k] != null) h[k] = String(headers[k])
+    let status = ''
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const r = await fetch(`${peer.url}/webhook/github`, { method: 'POST', headers: h, body: raw, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) })
+        status = String(r.status)
+        await r.arrayBuffer().catch(() => {})
+        if (r.ok) break
+        if (r.status >= 400 && r.status < 500) break // the peer rejected it (bad signature, ...): retrying won't help
+      } catch (e) { status = `error: ${e.cause?.code ?? e.name ?? e.message}` }
+      if (attempt >= forwardRetryMs.length) break
+      await new Promise(resolve => setTimeout(resolve, forwardRetryMs[attempt]))
+    }
+    setPeerStatus.run(now(), status, peer.name)
+    log(`forward delivery=${delivery} -> ${peer.name} ${status}`)
+    return status
+  }
+
+  // Subscriptions of the peers, so `/bot <name>` counts a session listening on another box as a target.
+  // depth 2 reaches the peers of the peers, which covers a primary with several joined boxes from any box.
+  async function peerSubscriptions(query, depth) {
+    if (depth <= 0) return []
+    const lists = await Promise.all(listPeers().map(async peer => {
+      try {
+        const q = new URLSearchParams(query); q.set('depth', String(depth - 1))
+        const r = await fetch(`${peer.url}/api/subscriptions?${q}`, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(PEER_SUBS_TIMEOUT_MS) })
+        if (!r.ok) return []
+        return (await r.json()).subscriptions ?? []
+      } catch { return [] }
+    }))
+    return lists.flat()
   }
 
   function maxSeq() {
@@ -199,7 +259,9 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
         e.created_at, e.updated_at, now(), raw.toString('utf8'))
       const stored = r.changes > 0
       if (stored) for (const w of [...waiters]) w()
-      log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}`)
+      const hop = req.headers[HOP_HEADER] != null
+      log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ' (forwarded)' : ''}`)
+      if (stored && !hop) for (const peer of listPeers()) forward(peer, raw, req.headers, delivery).catch(err => log(`forward ${peer.name}: ${err.message}`))
       return send(res, stored ? 201 : 200, { stored, duplicate: !stored })
     }
 
@@ -236,6 +298,14 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
         const rows = db.prepare(`SELECT repo, issue, session, updated_at FROM subscriptions
           WHERE (? IS NULL OR repo = ?) AND (? IS NULL OR issue = ?) AND updated_at >= ? ORDER BY repo, issue, session`)
           .all(p.get('repo'), p.get('repo'), p.get('issue') && Number(p.get('issue')), p.get('issue') && Number(p.get('issue')), cutoff)
+        const depth = Math.min(Math.max(Number(p.get('depth') ?? 2) || 0, 0), 2)
+        const query = {}
+        for (const k of ['repo', 'issue', 'active_within']) if (p.has(k)) query[k] = p.get(k)
+        const seen = new Set(rows.map(x => `${x.repo}#${x.issue}#${x.session}`))
+        for (const x of await peerSubscriptions(query, depth)) {
+          const k = `${x.repo}#${x.issue}#${x.session}`
+          if (!seen.has(k)) { seen.add(k); rows.push({ ...x, peer: true }) }
+        }
         return send(res, 200, { subscriptions: rows })
       }
       const b = await readJson(req)
@@ -250,6 +320,25 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
       if (req.method === 'DELETE') {
         db.prepare('DELETE FROM subscriptions WHERE repo = ? AND issue = ? AND session = ?').run(b.repo, b.issue, b.session)
         return send(res, 200, { ok: true })
+      }
+    }
+
+    if (url.pathname === '/api/peers') {
+      if (req.method === 'GET') return send(res, 200, { peers: listPeers() })
+      const b = await readJson(req)
+      if (typeof b.name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(b.name)) throw new HttpError(400, 'name ([A-Za-z0-9._-]{1,64}) required')
+      if (req.method === 'PUT') {
+        const peerUrl = normalizePeerUrl(b.url)
+        db.prepare(`INSERT INTO peers (name, url, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT (name) DO UPDATE SET url = excluded.url, updated_at = excluded.updated_at,
+            last_at = CASE WHEN peers.url = excluded.url THEN peers.last_at END,
+            last_status = CASE WHEN peers.url = excluded.url THEN peers.last_status END`).run(b.name, peerUrl, now())
+        log(`peer ${b.name} -> ${peerUrl}`)
+        return send(res, 200, { ok: true, name: b.name, url: peerUrl })
+      }
+      if (req.method === 'DELETE') {
+        const r = db.prepare('DELETE FROM peers WHERE name = ?').run(b.name)
+        return send(res, 200, { ok: true, removed: r.changes > 0 })
       }
     }
 

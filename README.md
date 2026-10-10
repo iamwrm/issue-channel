@@ -67,6 +67,27 @@ deploy/issue-channel.sh webhook-add <owner/repo>     # GitHub webhook: issues + 
 
 The containers use `--restart unless-stopped`, so they come back after a reboot. The DB is at `~/.local/share/issue-channel/events.db`. `.env` in the same directory holds `WEBHOOK_SECRET` and `API_KEY` (mode 0600, never commit it). Only comments by the repo owner are delivered unless you set `ISSUECHAN_ALLOWED_AUTHORS` (below).
 
+### Peers: join from another box
+
+Your agents can run on several machines (say a server and a laptop) behind one GitHub webhook. Every box runs its own server, and the box with the webhook (the *primary*, ideally on a named tunnel so its URL stays put) copies each webhook it receives to the other boxes as the **same HTTP request**: same body, same `X-Hub-Signature-256`. Each box checks the signature itself and serves its own sessions from its own DB, so a box keeps working while another is offline.
+
+```sh
+# on the new box: use the primary's secrets (WEBHOOK_SECRET signs the copies, API_KEY guards /api/peers)
+mkdir -p ~/.local/share/issue-channel && chmod 700 ~/.local/share/issue-channel
+scp primary:.local/share/issue-channel/.env ~/.local/share/issue-channel/.env
+deploy/issue-channel.sh init --quick
+deploy/issue-channel.sh build
+deploy/issue-channel.sh up
+deploy/issue-channel.sh join https://<primary-hostname> laptop    # name defaults to the short hostname
+deploy/issue-channel.sh peers                                     # on either box: peers + last forward status
+```
+
+- `join` registers this box's URL on the primary, adds the primary as a peer here, and saves both in `deploy.env`. A quick tunnel gets a new URL on every start, so `up` (and `restart`) re-join with the new URL by themselves. `leave` undoes the join.
+- Don't run `webhook-add` on a joined box: the primary's webhook is enough. A webhook that a joined box receives directly is copied to the primary only.
+- A copy is sent once per new delivery id; redeliveries and forwarded copies (marked `X-Issue-Channel-Hop`) are never forwarded again, so peers can't loop. A failed copy is retried for about 4 minutes (2 s, 10 s, 30 s, 60 s, 120 s), except a 4xx answer (for example a box with another secret), which is recorded and not retried.
+- `/bot <name>` works across boxes: `GET /api/subscriptions` adds the peers' sessions (and their peers', 2 hops, 3 s timeout each, peers that are down are skipped), so a session listening on the laptop counts as a target on the primary too.
+- Without a server on the new box at all: set `ISSUECHAN_URL` to the primary's public URL (and `ISSUECHAN_API_KEY`). That's simpler, but the box then depends on the primary being up.
+
 ## Use from Claude Code
 
 ```sh
@@ -134,7 +155,8 @@ All `/api/*` routes need `Authorization: Bearer $API_KEY`.
 | `POST /api/events/query` | `{since, timeout≤90, limit≤500, include_payload, filter}` → `{events, next}`; long-polls until a match or timeout |
 | `GET /api/events?repo=&issue=&event=&action=&author=&since=&timeout=` | same, query-string form |
 | `GET /api/events/:seq` | one event with its full payload |
-| `GET/PUT/DELETE /api/subscriptions` | session registry used for `/bot <name>` |
+| `GET/PUT/DELETE /api/subscriptions` | session registry used for `/bot <name>`; `GET` also returns the peers' sessions (marked `peer: true`; `depth=0` for this server only) |
+| `GET/PUT/DELETE /api/peers` | `{name, url}`: servers this one copies each new webhook to, with the last forward status |
 
 Filter keys: `repo`, `issue`, `event`/`action`/`author` (a string or a list), `title`/`body` as `{contains|like|regex: "..."}`, and `exclude_body_contains`.
 
@@ -146,5 +168,5 @@ curl -s -H "Authorization: Bearer $API_KEY" "$(deploy/issue-channel.sh url)/api/
 ## Test
 
 ```sh
-npm ci && node --test   # in the issue-channel checkout: server, core, adapters, session-fork
+npm ci && node --test   # in the issue-channel checkout: server (incl. peers), core, adapters, session-fork
 ```
