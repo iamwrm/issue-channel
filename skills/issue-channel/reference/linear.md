@@ -25,7 +25,9 @@ Login: `deploy/issue-channel.sh linear-login` (OAuth page behind a throwaway qui
 | Deleting | Own comments: always. Another user's: needs `admin`. Deleting a comment deletes its whole thread, replies by others included |
 | Webhooks | Need a 200 within 5 s; failed deliveries are retried after 1 min, 1 h, 6 h. A `remove` event reaches the agent as "this comment you saw earlier was deleted" with the next `/bot` |
 | Issue edits | Linear's editor may re-save a description with normalized markdown (`*` bullets, `<links>`); that arrives as an edit by whoever had it open |
-| Closing | `scripts/linear.mjs set-state ENG-123 completed` (the team's first state of that type, e.g. "Done"); or `canceled` |
+| States | `set-state ENG-123 <name\|type\|in-progress>`: a state name, or a type (`completed`, `canceled`, `started`, …) = the team's first state of that type by position (`started` is "In Progress" before "In Review"), or `in-progress` = the "In Progress" state, else the first started one |
+| Listening | An issue the agent listens to at the user's request is set to In Progress (`create … --state in-progress`, or `set-state … in-progress` after subscribing) |
+| Closing | `scripts/linear.mjs set-state ENG-123 completed` ("Done"), or `canceled` |
 | Files | `uploads.linear.app/...` needs the Linear token: `scripts/attachment.sh` |
 
 ## Checking how something rendered

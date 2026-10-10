@@ -17,6 +17,9 @@ test('backup-issue parses GitHub and Linear refs', () => {
   assert.equal(parseRef('nonsense'), null)
 })
 
+// As in a real team: two "started" states, In Review sorted after In Progress.
+const STATES = [{ id: 's1', name: 'Done', type: 'completed', position: 3 }, { id: 's2', name: 'Todo', type: 'unstarted', position: 1 },
+  { id: 's4', name: 'In Review', type: 'started', position: 1002 }, { id: 's3', name: 'In Progress', type: 'started', position: 2 }]
 let api, calls, dir
 before(async () => {
   calls = []
@@ -26,10 +29,12 @@ before(async () => {
     const { query, variables } = JSON.parse(raw)
     calls.push({ query, variables })
     const data = query.includes('issue(id:') && !query.includes('team') ? { issue: { id: `uuid-${variables.id}` } }
-      : query.includes('team { states') ? { issue: { id: 'uuid', team: { states: { nodes: [
-        { id: 's1', name: 'Done', type: 'completed', position: 3 }, { id: 's2', name: 'Todo', type: 'unstarted', position: 1 }] } } } }
+      : query.includes('team { states') ? { issue: { id: 'uuid', team: { states: { nodes: STATES } } } }
+      : query.includes('teams(filter') ? { teams: { nodes: variables.k === 'REN' ? [{ id: 'team-1', states: { nodes: STATES } }] : [] } }
+      : query.includes('issueCreate') ? { issueCreate: { success: true, issue: { identifier: 'REN-9', url: 'https://linear.app/x/issue/REN-9', state: { name: 'In Progress' } } } }
       : query.includes('commentCreate') ? { commentCreate: { success: true, comment: { id: 'c1', url: 'u' } } }
       : query.includes('issueUpdate') ? { issueUpdate: { success: true, issue: { state: { name: 'Done' } } } }
+      : query.includes('commentUpdate') ? { commentUpdate: { success: true, comment: { url: 'u2' } } }
       : query.includes('commentDelete') ? (variables.id === 'gone' ? null : { commentDelete: { success: true } })
       : {}
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -63,5 +68,28 @@ test('linear.mjs set-state by type picks the team state; delete-comment reports 
   const d = await cli('delete-comment', 'c9', 'gone')
   assert.equal(d.code, 1)
   assert.match(d.stdout, /c9: deleted\ngone: already gone/)
+  // One argument with newline-separated ids (what an unquoted $ids gives in zsh) is split, not sent as one id.
+  calls.length = 0
+  assert.match((await cli('delete-comment', 'c1\nc2 c3')).stdout, /c1: deleted\nc2: deleted\nc3: deleted/)
+  assert.deepEqual(calls.map(c => c.variables.id), ['c1', 'c2', 'c3'])
   assert.match((await cli('comment', 'not-a-ref', '--body', 'x')).stderr, /not a Linear issue ref/)
+})
+
+test('linear.mjs create: team by key, title/description, --state in-progress picks "In Progress" (not "In Review")', async () => {
+  calls.length = 0
+  const r = await cli('create', 'ren', '--title', 'pi-durable try', '--description', 'd', '--state', 'in-progress')
+  assert.equal(r.code, 0, r.stderr)
+  assert.deepEqual(JSON.parse(r.stdout), { identifier: 'REN-9', url: 'https://linear.app/x/issue/REN-9', state: 'In Progress' })
+  assert.deepEqual(calls.find(c => c.query.includes('issueCreate')).variables.i, { teamId: 'team-1', title: 'pi-durable try', description: 'd', stateId: 's3' })
+  calls.length = 0
+  await cli('set-state', 'REN-9', 'started')
+  assert.equal(calls.find(c => c.query.includes('issueUpdate')).variables.i.stateId, 's3', 'type "started" = first by position')
+  assert.match((await cli('create', 'NOPE', '--title', 'x')).stderr, /no team NOPE/)
+  assert.match((await cli('create', 'REN')).stderr, /usage: create/)
+})
+
+test('linear.mjs edit-comment replaces the body and keeps the marker', async () => {
+  calls.length = 0
+  assert.equal((await cli('edit-comment', 'c5', '--body', 'new text')).stdout.trim(), 'updated u2')
+  assert.deepEqual(calls[0].variables, { id: 'c5', i: { body: 'new text\n\n[//]: # (issue-channel:bot)\n' } })
 })
