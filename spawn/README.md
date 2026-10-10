@@ -56,7 +56,7 @@ Re-tested after the switch to tabs (2026-10-09, throwaway #21, now closed): `--n
 
 Restart a Claude Code agent **in place** (same herdr pane), optionally into a **CLM-compacted fork** of its session, so it continues with a smaller, edited context. Works on another agent or, run detached, on the agent itself. Usage and rules: the header of [`restart-agent.sh`](restart-agent.sh) and the skill's [`reference/ops.md`](../skills/issue-channel/reference/ops.md#restart-or-compact-yourself).
 
-Steps: wait until idle → (with `--fork`) `session-fork fork` (dropping the plan-writing turn) + `handoff`, parent state parked → `/exit` → `$ISSUECHAN_LAUNCHER … --resume <id or fork>` in the same pane, answering the known dialogs → restore the herdr name → check the channel process → send `--then`.
+Steps: wait until idle → (with `--fork <live.md>`, a `session-fork mirror --full` the agent edited) `session-fork fork` (dropping the turn that did the edit; stale files refused; `live.diff.md` written) + `handoff`, parent state parked → `/exit` → `$ISSUECHAN_LAUNCHER … --resume <id or fork>` in the same pane, answering the known dialogs → restore the herdr name → check the channel process → send `--then`.
 
 **Harnesses:** Claude Code only for now (`$ISSUECHAN_LAUNCHER`, `--resume`, Claude Code's session logs and dialogs). Support for other agents such as **Codex** and **pi** is planned (see `BACKLOG.md`).
 
