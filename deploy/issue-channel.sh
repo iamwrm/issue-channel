@@ -159,7 +159,9 @@ cmd_leave() {
 cmd_peers() {
   load
   api http://127.0.0.1:8787 GET /api/peers |
-    jq -r '["NAME", "URL", "LAST", "AT"], (.peers[] | [.name, .url, (.last_status // "-"), (.last_at // "-")]) | @tsv' | column -t
+    jq -r '["NAME", "URL", "PENDING", "FAILS", "STATE", "LAST", "AT"],
+      (.peers[] | [.name, .url, .pending, .fail_count, (if .parked then "parked" elif .next_at then "retry " + .next_at else "ok" end),
+        (.last_status // "-"), (.last_at // "-")]) | @tsv' | column -t -s $'\t'
 }
 
 cmd_down() { d rm -f "$SERVER" "$TUNNEL" >/dev/null 2>&1 || true; echo down; }

@@ -12,7 +12,7 @@ let n = 0
 
 async function start(name) {
   const logs = []
-  const server = http.createServer(createApp({ db: openDb(':memory:'), webhookSecret: SECRET, apiKey: KEY, log: m => logs.push(m), forwardRetryMs: [50, 50] }))
+  const server = http.createServer(createApp({ db: openDb(':memory:'), webhookSecret: SECRET, apiKey: KEY, log: m => logs.push(m), retry: { baseMs: 40, maxMs: 200, maxAttempts: 3, jitter: 0 } }))
   await new Promise(r => server.listen(0, '127.0.0.1', r))
   nodes[name] = { server, logs, base: `http://127.0.0.1:${server.address().port}` }
 }
@@ -180,5 +180,24 @@ test('a peer that is down does not break the subscription list', async () => {
     assert.ok(subscriptions.some(s => s.session === 'default'))
   } finally {
     await del('primary', '/api/peers', { name: 'gone' })
+  }
+})
+
+test('peers added or removed on a running server apply to the next webhook, without a restart', async () => {
+  const seen = []
+  const sink = http.createServer((req, res) => { seen.push(req.headers['x-github-delivery']); req.resume(); res.writeHead(201).end('{}') })
+  await new Promise(r => sink.listen(0, '127.0.0.1', r))
+  try {
+    await hook('primary', comment(30, 300, 'a'), { delivery: 'live-before' })
+    await put('primary', '/api/peers', { name: 'late', url: `http://127.0.0.1:${sink.address().port}` })
+    await hook('primary', comment(30, 301, 'b'), { delivery: 'live-added' })
+    await eventually(() => seen.includes('live-added'))
+    await del('primary', '/api/peers', { name: 'late' })
+    await hook('primary', comment(30, 302, 'c'), { delivery: 'live-removed' })
+    await new Promise(r => setTimeout(r, 200))
+    assert.deepEqual(seen, ['live-added'])
+  } finally {
+    await del('primary', '/api/peers', { name: 'late' })
+    sink.close()
   }
 })
