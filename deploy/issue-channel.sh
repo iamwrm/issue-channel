@@ -8,10 +8,13 @@
 #   issue-channel.sh url                              print the public URL
 #   issue-channel.sh webhook-add <owner/repo>         register the GitHub webhook (gh CLI); in quick mode
 #                                                     it also repoints an existing quick-tunnel webhook
+#   issue-channel.sh join <primary-url> [name]        replicate the primary's webhooks to this box (needs the
+#                                                     primary's .env here); `up` re-joins with the new URL
+#   issue-channel.sh leave | peers                    stop replicating / list this server's peers
 #
 # State lives in $ISSUECHAN_STATE (default ~/.local/share/issue-channel):
 #   .env            WEBHOOK_SECRET, API_KEY (0600, never commit)
-#   deploy.env      MODE (named|quick); named: HOSTNAME, TUNNEL_NAME, TUNNEL_ID
+#   deploy.env      MODE (named|quick); named: HOSTNAME, TUNNEL_NAME, TUNNEL_ID; joined: PRIMARY_URL, PEER_NAME
 #   cloudflared.yml tunnel ingress config (named mode)
 #   events.db       SQLite event log
 # A named tunnel must already exist (`cloudflared tunnel create` + `tunnel route dns`);
@@ -106,8 +109,57 @@ cmd_up() {
       "$CF_IMAGE" tunnel --config /etc/cloudflared/config.yml run >/dev/null
   fi
   echo "up: local http://127.0.0.1:8787, public $(public_url)"
-  [[ $MODE == quick ]] && echo "quick tunnel: the URL is new, run: $0 webhook-add <owner/repo>"
+  if [[ -n ${PRIMARY_URL:-} ]]; then
+    wait_healthy && cmd_join "$PRIMARY_URL" "$PEER_NAME"
+  elif [[ $MODE == quick ]]; then
+    echo "quick tunnel: the URL is new, run: $0 webhook-add <owner/repo>"
+  fi
   return 0
+}
+
+api_key() { sed -n 's/^API_KEY=//p' "$STATE/.env"; }
+# api <base-url> <method> <path> [json]: call an issue-channel API with this box's key.
+api() {
+  local args=(-fsS -X "$2" -H "Authorization: Bearer $(api_key)" -H 'content-type: application/json' --max-time 15)
+  [[ -n ${4:-} ]] && args+=(-d "$4")
+  curl "${args[@]}" "${1%/}$3"
+}
+wait_healthy() {
+  local i
+  for i in $(seq 1 30); do curl -fsS --max-time 2 "$(public_url)/healthz" >/dev/null 2>&1 && return 0; sleep 1; done
+  echo "warning: $(public_url) is not reachable yet" >&2; return 0
+}
+
+# Join a primary: it replicates every webhook it receives to this box, and this box to it. Both boxes must
+# share one .env (WEBHOOK_SECRET signs the copies, API_KEY guards /api/peers), so copy the primary's first.
+cmd_join() {
+  load
+  local primary="${1:-}" name="${2:-$(hostname -s)}" me
+  [[ -n "$primary" ]] || die "usage: $0 join <primary-url> [name]"
+  primary="${primary%/}"
+  api "$primary" GET /api/cursor >/dev/null 2>&1 ||
+    die "cannot use $primary/api with this box's API_KEY: copy the primary's $STATE/.env here, then $0 restart"
+  me="$(public_url)"
+  api "$primary" PUT /api/peers "$(jq -nc --arg name "$name" --arg url "$me" '{name: $name, url: $url}')" >/dev/null
+  api http://127.0.0.1:8787 PUT /api/peers "$(jq -nc --arg url "$primary" '{name: "primary", url: $url}')" >/dev/null
+  sed -i '/^PRIMARY_URL=/d; /^PEER_NAME=/d' "$STATE/deploy.env"
+  printf 'PRIMARY_URL=%s\nPEER_NAME=%s\n' "$primary" "$name" >> "$STATE/deploy.env"
+  echo "joined $primary as $name ($me)"
+}
+
+cmd_leave() {
+  load
+  [[ -n ${PRIMARY_URL:-} ]] || die "not joined"
+  api "$PRIMARY_URL" DELETE /api/peers "$(jq -nc --arg name "$PEER_NAME" '{name: $name}')" >/dev/null || echo "warning: could not reach $PRIMARY_URL" >&2
+  api http://127.0.0.1:8787 DELETE /api/peers '{"name":"primary"}' >/dev/null || true
+  sed -i '/^PRIMARY_URL=/d; /^PEER_NAME=/d' "$STATE/deploy.env"
+  echo "left $PRIMARY_URL"
+}
+
+cmd_peers() {
+  load
+  api http://127.0.0.1:8787 GET /api/peers |
+    jq -r '["NAME", "URL", "LAST", "AT"], (.peers[] | [.name, .url, (.last_status // "-"), (.last_at // "-")]) | @tsv' | column -t
 }
 
 cmd_down() { d rm -f "$SERVER" "$TUNNEL" >/dev/null 2>&1 || true; echo down; }
@@ -157,6 +209,9 @@ case "${1:-}" in
   restart) cmd_down; cmd_up ;;
   status) cmd_status ;;
   url) load; public_url ;;
+  join) shift; cmd_join "$@" ;;
+  leave) cmd_leave ;;
+  peers) cmd_peers ;;
   logs) shift; cmd_logs "$@" ;;
   webhook-add) shift; cmd_webhook_add "$@" ;;
   *) sed -n '2,22p' "$0"; exit 1 ;;
