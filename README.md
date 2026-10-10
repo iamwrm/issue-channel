@@ -83,8 +83,10 @@ deploy/issue-channel.sh peers                                     # on either bo
 ```
 
 - `join` registers this box's URL on the primary, adds the primary as a peer here, and saves both in `deploy.env`. A quick tunnel gets a new URL on every start, so `up` (and `restart`) re-join with the new URL by themselves. `leave` undoes the join.
-- Don't run `webhook-add` on a joined box: the primary's webhook is enough. A webhook that a joined box receives directly is copied to the primary only.
-- A copy is sent once per new delivery id; redeliveries and forwarded copies (marked `X-Issue-Channel-Hop`) are never forwarded again, so peers can't loop. A failed copy is retried for about 4 minutes (2 s, 10 s, 30 s, 60 s, 120 s), except a 4xx answer (for example a box with another secret), which is recorded and not retried.
+- Pushing works both ways: a webhook that a joined box receives directly (say, a repo whose webhook points at the laptop's quick tunnel) goes to the primary, and the primary relays it to the other boxes.
+- **No loops:** a server forwards a delivery only the first time it stores it; a copy that comes back is a duplicate (`200`) and stops there. Copies carry a hop count (`X-Issue-Channel-Hop`), and nothing is relayed beyond 4 hops.
+- **Auth:** a copy keeps GitHub's `X-Hub-Signature-256` and adds `X-Issue-Channel-Signature`, an HMAC with the same `WEBHOOK_SECRET` over the delivery id, event, hop count and body. A receiver needs both, so a replayed GitHub request can't fake a copy, a hop count or a delivery id. `/api/peers` and the subscription lookups between boxes need `API_KEY`.
+- A failed copy is retried for about 4 minutes (2 s, 10 s, 30 s, 60 s, 120 s), except a 4xx answer (for example a box with another secret), which is recorded and not retried.
 - `/bot <name>` works across boxes: `GET /api/subscriptions` adds the peers' sessions (and their peers', 2 hops, 3 s timeout each, peers that are down are skipped), so a session listening on the laptop counts as a target on the primary too.
 - Without a server on the new box at all: set `ISSUECHAN_URL` to the primary's public URL (and `ISSUECHAN_API_KEY`). That's simpler, but the box then depends on the primary being up.
 

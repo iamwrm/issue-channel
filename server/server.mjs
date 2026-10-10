@@ -11,8 +11,12 @@ const MAX_BODY = 5 * 1024 * 1024
 // Cloudflare closes proxied requests that send no response for ~100s, so cap waits below that.
 const MAX_WAIT_S = 90
 const MAX_LIMIT = 500
-// Forwarded webhooks carry this header; a server never forwards them again.
+// A copy sent to a peer carries its hop count and a peer signature over (delivery, event, hop, body), so
+// the hop count and delivery id can't be forged by someone who only replays a GitHub request.
+// Loops end because a server forwards a delivery only the first time it stores it; MAX_HOPS is a second stop.
 const HOP_HEADER = 'x-issue-channel-hop'
+const PEER_SIG_HEADER = 'x-issue-channel-signature'
+export const MAX_HOPS = 4
 const FORWARD_HEADERS = ['content-type', 'user-agent', 'x-github-event', 'x-github-delivery', 'x-github-hook-id',
   'x-github-hook-installation-target-id', 'x-github-hook-installation-target-type', 'x-hub-signature', 'x-hub-signature-256']
 const PEER_TIMEOUT_MS = 10000
@@ -141,6 +145,16 @@ export class HttpError extends Error {
 
 const SUMMARY_COLS = 'seq, delivery_id, event, action, repo, issue, comment_id, author, title, body, created_at, updated_at, received_at'
 
+export function peerSignature(secret, { delivery, event, hop }, raw) {
+  const h = crypto.createHmac('sha256', secret).update(`issue-channel-peer\n${delivery}\n${event}\n${hop}\n`).update(raw)
+  return 'sha256=' + h.digest('hex')
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a ?? '')), y = Buffer.from(String(b))
+  return x.length === y.length && crypto.timingSafeEqual(x, y)
+}
+
 export function normalizePeerUrl(u) {
   let url
   try { url = new URL(String(u)) } catch { throw new HttpError(400, 'url must be an absolute http(s) URL') }
@@ -177,9 +191,11 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
   const setPeerStatus = db.prepare('UPDATE peers SET last_at = ?, last_status = ? WHERE name = ?')
 
   // Replicate a webhook to every peer as the same HTTP request; the peer checks the signature itself.
-  async function forward(peer, raw, headers, delivery) {
-    const h = { [HOP_HEADER]: '1' }
+  async function forward(peer, raw, headers, delivery, hop) {
+    const h = {}
     for (const k of FORWARD_HEADERS) if (headers[k] != null) h[k] = String(headers[k])
+    h[HOP_HEADER] = String(hop)
+    h[PEER_SIG_HEADER] = peerSignature(webhookSecret, { delivery, event: h['x-github-event'], hop }, raw)
     let status = ''
     for (let attempt = 0; ; attempt++) {
       try {
@@ -252,6 +268,15 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
       const delivery = req.headers['x-github-delivery']
       const event = req.headers['x-github-event']
       if (!delivery || !event) throw new HttpError(400, 'missing GitHub headers')
+      // A copy from a peer must also prove that its hop count and delivery id come from a peer.
+      let hop = 0
+      if (req.headers[HOP_HEADER] != null) {
+        hop = Number(req.headers[HOP_HEADER])
+        if (!Number.isInteger(hop) || hop < 1 || hop > MAX_HOPS) throw new HttpError(400, 'bad hop count')
+        if (!safeEqual(req.headers[PEER_SIG_HEADER], peerSignature(webhookSecret, { delivery, event, hop }, raw))) {
+          throw new HttpError(401, 'bad peer signature')
+        }
+      }
       let payload
       try { payload = JSON.parse(raw.toString('utf8')) } catch { throw new HttpError(400, 'payload must be JSON') }
       const e = extract(String(event), payload)
@@ -259,9 +284,12 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
         e.created_at, e.updated_at, now(), raw.toString('utf8'))
       const stored = r.changes > 0
       if (stored) for (const w of [...waiters]) w()
-      const hop = req.headers[HOP_HEADER] != null
-      log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ' (forwarded)' : ''}`)
-      if (stored && !hop) for (const peer of listPeers()) forward(peer, raw, req.headers, delivery).catch(err => log(`forward ${peer.name}: ${err.message}`))
+      log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ` (forwarded, hop ${hop})` : ''}`)
+      // Relay on: a box's own webhook reaches the primary and through it the other boxes. Each server
+      // forwards a delivery once (only when it is new here), so the flood ends; the sender just answers 200.
+      if (stored && hop < MAX_HOPS) {
+        for (const peer of listPeers()) forward(peer, raw, req.headers, String(delivery), hop + 1).catch(err => log(`forward ${peer.name}: ${err.message}`))
+      }
       return send(res, stored ? 201 : 200, { stored, duplicate: !stored })
     }
 

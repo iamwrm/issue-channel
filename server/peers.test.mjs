@@ -2,7 +2,7 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import crypto from 'node:crypto'
-import { openDb, createApp, normalizePeerUrl } from './server.mjs'
+import { openDb, createApp, normalizePeerUrl, peerSignature, MAX_HOPS } from './server.mjs'
 
 // Three servers sharing one .env: a primary (gets the GitHub webhook) and two joined boxes.
 const SECRET = 's'.repeat(40)
@@ -78,32 +78,58 @@ test('join: a webhook on the primary is replicated to every peer, once, with its
     assert.equal(ev[0].delivery_id, 'rep-1')
     assert.equal(ev[0].body, '/bot hi')
   }
-  // The peers stored it as forwarded and did not send it back (no loop): the primary still has one copy
-  // and logged no duplicate.
+  // Each peer stored it as hop 1 and relayed it once; the primary already had it, so the flood stops there.
   await new Promise(r => setTimeout(r, 200))
-  assert.ok(nodes.laptop.logs.some(l => /delivery=rep-1 stored \(forwarded\)/.test(l)))
+  assert.ok(nodes.laptop.logs.some(l => /delivery=rep-1 stored \(forwarded, hop 1\)/.test(l)))
   assert.equal((await eventsOn('primary', 10)).length, 1)
-  assert.ok(!nodes.primary.logs.some(l => /delivery=rep-1 duplicate/.test(l)))
+  assert.equal(nodes.primary.logs.filter(l => /delivery=rep-1 duplicate/.test(l)).length, 2)
   const peers = (await json('primary', '/api/peers')).peers
   assert.deepEqual(peers.map(p => p.last_status), ['201', '201'])
 })
 
-test('a redelivery (duplicate) is not forwarded again; a forwarded request is never re-forwarded', async () => {
+const forwards = (name, delivery) => nodes[name].logs.filter(l => l.startsWith(`forward delivery=${delivery} `)).length
+
+test('a redelivery (duplicate) is not forwarded again', async () => {
   await hook('primary', comment(11, 110, 'x'), { delivery: 'rep-2' })
-  await eventually(async () => (await eventsOn('laptop', 11)).length)
-  const before = nodes.primary.logs.filter(l => l.startsWith('forward ')).length
-  const dup = await hook('primary', comment(11, 110, 'x'), { delivery: 'rep-2' })
-  assert.equal(dup.status, 200)
-  // laptop gets a forwarded request directly: it stores it but must not pass it on to the primary.
-  await hook('laptop', comment(12, 120, 'y'), { delivery: 'rep-3', headers: { 'x-issue-channel-hop': '1' } })
+  await eventually(async () => (await eventsOn('laptop', 11)).length && (await eventsOn('desk', 11)).length)
   await new Promise(r => setTimeout(r, 200))
-  assert.equal(nodes.primary.logs.filter(l => l.startsWith('forward ')).length, before)
-  assert.equal((await eventsOn('primary', 12)).length, 0)
+  const before = forwards('primary', 'rep-2')
+  assert.equal((await hook('primary', comment(11, 110, 'x'), { delivery: 'rep-2' })).status, 200)
+  await new Promise(r => setTimeout(r, 200))
+  assert.equal(forwards('primary', 'rep-2'), before)
 })
 
-test('a webhook that reaches a joined box directly is replicated to the primary', async () => {
+test("a joined box's own webhook reaches the primary and, through it, the other boxes; the flood ends", async () => {
   await hook('desk', comment(13, 130, 'z'), { delivery: 'rep-4' })
-  assert.equal((await eventually(async () => (await eventsOn('primary', 13)).length)), 1)
+  for (const box of ['primary', 'laptop']) assert.equal((await eventually(async () => (await eventsOn(box, 13)).length)), 1, box)
+  await new Promise(r => setTimeout(r, 300))
+  // desk -> primary; primary -> laptop + desk (dup); laptop -> primary (dup). Every server forwarded once.
+  assert.deepEqual(['desk', 'primary', 'laptop'].map(b => forwards(b, 'rep-4')), [1, 2, 1])
+  for (const box of ['primary', 'laptop', 'desk']) assert.equal((await eventsOn(box, 13)).length, 1, box)
+})
+
+test('auth: a copy needs a valid peer signature, so the hop count and delivery id cannot be forged', async () => {
+  const body = comment(16, 160, 'forged')
+  const raw = JSON.stringify(body)
+  const sig = (o, secret = SECRET) => peerSignature(secret, { event: 'issue_comment', ...o }, raw)
+  // GitHub-signed body, hop header but no or a wrong peer signature: rejected, nothing stored.
+  assert.equal((await hook('laptop', body, { delivery: 'f-1', headers: { 'x-issue-channel-hop': '1' } })).status, 401)
+  assert.equal((await hook('laptop', body, { delivery: 'f-2', headers: { 'x-issue-channel-hop': '1', 'x-issue-channel-signature': sig({ delivery: 'f-2', hop: 1 }, 'x'.repeat(40)) } })).status, 401)
+  // A valid peer signature for another delivery id or hop count does not carry over.
+  assert.equal((await hook('laptop', body, { delivery: 'f-3', headers: { 'x-issue-channel-hop': '2', 'x-issue-channel-signature': sig({ delivery: 'f-3', hop: 1 }) } })).status, 401)
+  assert.equal((await hook('laptop', body, { delivery: 'f-4', headers: { 'x-issue-channel-hop': '1', 'x-issue-channel-signature': sig({ delivery: 'other', hop: 1 }) } })).status, 401)
+  assert.equal((await hook('laptop', body, { delivery: 'f-5', headers: { 'x-issue-channel-hop': String(MAX_HOPS + 1), 'x-issue-channel-signature': sig({ delivery: 'f-5', hop: MAX_HOPS + 1 }) } })).status, 400)
+  assert.equal((await eventsOn('laptop', 16)).length, 0)
+  // The GitHub signature is still required on a copy.
+  const peerOnly = await fetch(`${nodes.laptop.base}/webhook/github`, { method: 'POST', body: raw, headers: {
+    'x-github-event': 'issue_comment', 'x-github-delivery': 'f-6', 'x-issue-channel-hop': '1', 'x-issue-channel-signature': sig({ delivery: 'f-6', hop: 1 }) } })
+  assert.equal(peerOnly.status, 401)
+  // A valid copy at the last hop is stored but not relayed further.
+  const ok = await hook('laptop', body, { delivery: 'f-7', headers: { 'x-issue-channel-hop': String(MAX_HOPS), 'x-issue-channel-signature': sig({ delivery: 'f-7', hop: MAX_HOPS }) } })
+  assert.equal(ok.status, 201)
+  await new Promise(r => setTimeout(r, 200))
+  assert.equal(forwards('laptop', 'f-7'), 0)
+  assert.equal((await eventsOn('primary', 16)).length, 0)
 })
 
 test('a peer with another secret rejects the copy; the primary records it and does not retry a 401', async () => {
