@@ -1,5 +1,6 @@
 // deploy/linear-login.mjs against a fake Linear token endpoint: secret path, scopes/actor, PKCE exchange,
 // merged linear.env (0600), webhook secret into .env.
+import { fileURLToPath } from 'node:url'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -8,6 +9,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
+import { once } from 'node:events'
 
 let tokenServer, login, state, exchanges = []
 const SECRET = 'a'.repeat(32)
@@ -27,7 +29,7 @@ before(async () => {
     res.end(JSON.stringify({ access_token: 'acc', refresh_token: 'ref', expires_in: 86400, scope: 'read write comments:create admin' }))
   })
   await new Promise(r => tokenServer.listen(0, '127.0.0.1', r))
-  login = spawn(process.execPath, [new URL('./linear-login.mjs', import.meta.url).pathname], { stdio: 'ignore', env: {
+  login = spawn(process.execPath, [fileURLToPath(new URL('./linear-login.mjs', import.meta.url))], { stdio: 'ignore', env: {
     PATH: process.env.PATH, PORT: String(PORT), LOGIN_SECRET: SECRET, PUBLIC_URL: 'https://tunnel.example', ISSUECHAN_STATE: state,
     DONE_FILE: path.join(state, 'done'), LINEAR_OAUTH_TOKEN_URL: `http://127.0.0.1:${tokenServer.address().port}/oauth/token` } })
   for (let i = 0; i < 50; i++) { try { await fetch(`${base}/`); break } catch { await sleep(50) } }
@@ -75,4 +77,36 @@ test('callback: PKCE exchange, tokens merged into linear.env (0600), webhook sec
   assert.match(dotenv, /WEBHOOK_SECRET=w\nAPI_KEY=k\nLINEAR_WEBHOOK_SECRET=whsec\n/)
   assert.equal(fs.readFileSync(path.join(state, 'done'), 'utf8'), 'user webhook-secret\n')
   assert.equal((await fetch(`${base}/callback?code=x&state=${loc.searchParams.get('state')}`)).status, 400, 'a state works once')
+})
+
+test('local login needs no tunnel, requests no admin, saves tokens privately, and stops after success', { timeout: 10000 }, async () => {
+  const localState = fs.mkdtempSync(path.join(os.tmpdir(), 'linear local # '))
+  let output = ''
+  const localLogin = spawn(process.execPath, [fileURLToPath(new URL('./linear-login-local.mjs', import.meta.url))], { stdio: ['ignore', 'ignore', 'pipe'], env: {
+    PATH: process.env.PATH, PORT: String(PORT + 2000), ISSUECHAN_STATE: localState,
+    LINEAR_OAUTH_TOKEN_URL: `http://127.0.0.1:${tokenServer.address().port}/oauth/token`,
+  } })
+  localLogin.stderr.on('data', data => { output += data })
+  try {
+    let localBase
+    for (let i = 0; i < 50; i++) {
+      localBase = output.match(/Login page: (http:\/\/127\.0\.0\.1:\d+\/[a-f0-9]+)\//)?.[1]
+      if (localBase) { try { await fetch(localBase + '/'); break } catch {} }
+      await sleep(50)
+    }
+    assert.ok(localBase, 'prints the local login page')
+    assert.doesNotMatch(output, /access_token|refresh_token|acc|ref\n/)
+    const page = await (await fetch(localBase + '/')).text()
+    assert.match(page, /read,write,comments:create<\/code>/)
+    assert.equal((await fetch(new URL('/', localBase))).status, 404)
+    const start = await fetch(localBase + '/start', { method: 'POST', redirect: 'manual', body: new URLSearchParams({ client_id: 'local-client' }) })
+    const authorize = new URL(start.headers.get('location'))
+    assert.equal(authorize.searchParams.get('scope'), 'read,write,comments:create')
+    assert.equal(authorize.searchParams.get('redirect_uri'), localBase + '/callback')
+    const exited = once(localLogin, 'exit')
+    assert.equal((await fetch(localBase + '/callback?code=local-code&state=' + authorize.searchParams.get('state'))).status, 200)
+    assert.match(fs.readFileSync(path.join(localState, 'linear.env'), 'utf8'), /LINEAR_ACCESS_TOKEN=acc/)
+    assert.equal(fs.statSync(path.join(localState, 'linear.env')).mode & 0o777, 0o600)
+    assert.equal((await exited)[0], 0)
+  } finally { localLogin.kill(); fs.rmSync(localState, { recursive: true, force: true }) }
 })
