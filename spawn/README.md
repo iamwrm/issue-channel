@@ -58,6 +58,8 @@ Restart a Claude Code agent **in place** (same herdr pane), optionally into a **
 
 Steps: wait until idle → (with `--fork`) `session-fork fork` (dropping the plan-writing turn) + `handoff`, parent state parked → `/exit` → `$ISSUECHAN_LAUNCHER … --resume <id or fork>` in the same pane, answering the known dialogs → restore the herdr name → check the channel process → send `--then`.
 
+**Harnesses:** Claude Code only for now (`$ISSUECHAN_LAUNCHER`, `--resume`, Claude Code's session logs and dialogs). Support for other agents such as **Codex** and **pi** is planned (see `BACKLOG.md`).
+
 ## Live test (2026-10-10, throwaway issue, `clauded`)
 
 A test agent spawned with `spawn-agent.sh` got a codeword + number in one turn, a secret word in another, and a long file summary. A `/bot` asking for them was posted **during** each switch.

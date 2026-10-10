@@ -17,10 +17,11 @@
 # Run it DETACHED when an agent restarts itself (its own turn has to end first):
 #   setsid nohup restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" … >log 2>&1 </dev/null &
 # Prints JSON on success: {"pane", "from", "session", "forked", "channel_pid", "seconds"}.
+# Claude Code only for now; Codex and pi support is planned (BACKLOG.md).
 set -uo pipefail
 
 die() { echo "restart-agent: $*" >&2; exit 1; }
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 log() { echo "[$(date -u +%T)] $*" >&2; }
 
 pane='' sid='' plan='' then='' name='' wait_idle=1800 keep_last=''
