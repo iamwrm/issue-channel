@@ -54,6 +54,10 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 - `scripts/linear.mjs` covers what the MCP tools don't: `create`, `issue`, `comment`, `edit-comment`, `delete-comment`, `set-description`, `set-state`, `whoami`. Don't hand-write GraphQL for these.
 - More in [reference/linear.md](reference/linear.md).
 
+## Restarting or compacting yourself
+
+To reload the channel, or to shrink your context (CLM-compact: `session-fork` drops or summarizes whole turns) and continue in the same pane, use `spawn/restart-agent.sh`, detached, with `--then`. Rules and commands: [reference/ops.md](reference/ops.md#restart-or-compact-yourself).
+
 ## Operating the channel
 
-Reloading the channel after a code change, restarting your own session with herdr, checking processes: [reference/ops.md](reference/ops.md).
+Which code runs, finding the channel process, other sessions: [reference/ops.md](reference/ops.md).

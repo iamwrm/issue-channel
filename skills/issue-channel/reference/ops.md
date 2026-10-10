@@ -16,11 +16,34 @@ for p in $(pgrep -f 'adapters/claude-code/channel.mjs'); do
 done
 ```
 
-## Reloading the channel
+## Restart or compact yourself
 
-- In the session's terminal: `/mcp` → reconnect `issuechan`. Subscriptions resume from the saved cursor.
-- Or restart the whole session in place with herdr, from a **detached** script (your own turn has to end first): wait until `herdr agent get <pane>` reports `idle`/`done`, send `/exit`, wait until the agent is gone, then `herdr pane run <pane> "<launcher> --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan --resume <session id>"`, answer the dev-channel dialog, and finally `herdr agent prompt <pane> "<what to do next>"` so the resumed session continues. Under `set -o pipefail`, `herdr agent get` fails once the agent is gone; treat that as "gone", don't let it abort the script.
-- Subscriptions are restored automatically after either; issues you subscribe to later start from "now" (see SKILL.md: Listening).
+Use `spawn/restart-agent.sh` (never hand-roll `/exit` + `--resume`). It waits until the agent is idle, so an agent can run it **on itself**, detached, as the last step of a turn:
+
+```sh
+# plain restart in place: same session and context, the channel reloads with the current code
+setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" \
+  --name <herdr name> --then "<what to do once back>" > /tmp/restart.json 2> /tmp/restart.log < /dev/null &
+
+# CLM-compact, then restart in place: the edited fork continues in the same pane
+node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror "$CLAUDE_CODE_SESSION_ID"     # numbered turns
+#   … write plan.json (session-fork/README.md, "Plan") …
+setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" \
+  --name <herdr name> --fork plan.json --then "<what to do once back>" > /tmp/restart.json 2> /tmp/restart.log < /dev/null &
+```
+
+| Rule | Why (seen live, 2026-10-10) |
+|---|---|
+| Always pass `--then`: the resumed session doesn't know it was restarted | It just sits idle otherwise |
+| Pass `--name`: herdr doesn't report an agent's name, so the script can't restore it by itself | `herdr agent get` has no name field |
+| The turn that runs `mirror` and writes the plan is dropped automatically (`--keep-last` keeps it) | Its mirror output quotes the turns the plan drops: a "dropped" secret survived until this was fixed |
+| Drop or replace **every** turn whose prompt, tool output or reply carries what must go, not just the turn it came from; never put it in a note | Later turns echoed it |
+| Check after the restart: the reply tag shows the new session id (`cc:<fork id8>`), and ask for something the plan kept | That's how the tests verified it |
+| Subscriptions, cursors and open 👀 requests move to the fork (`handoff`); the parent's state is parked as `cc-<id>.json.handed-off`. A `/bot` posted during the switch is delivered after the resume | Verified in every test |
+| A restart takes about 8–14 s. Compaction saves what the plan drops; the session's first turn (system prompt, tools) stays | 58k → 42–51k tokens in the tests |
+| Agents may ask before restarting themselves when the request comes as pasted text; a `/bot` from the user is the trusted way to ask | Seen in T3 |
+
+Without herdr: `/mcp` → reconnect `issuechan` reloads just the channel (no compaction).
 
 ## Other sessions
 
