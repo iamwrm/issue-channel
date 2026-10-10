@@ -20,6 +20,11 @@ export const MAX_HOPS = 4
 const FORWARD_HEADERS = ['content-type', 'user-agent', 'x-github-event', 'x-github-delivery', 'x-github-hook-id',
   'x-github-hook-installation-target-id', 'x-github-hook-installation-target-type', 'x-hub-signature', 'x-hub-signature-256']
 const PEER_TIMEOUT_MS = 10000
+// Copies to a peer go through a durable outbox, one peer at a time and in order. Backoff is per peer
+// (it measures the peer's connectivity, not one message): base * 2^(failures-1), capped, with jitter.
+// After maxAttempts failures in a row the peer is parked: its copies stay queued (up to maxAgeMs / maxRows)
+// and it is tried again when it re-joins (PUT /api/peers), when a new webhook arrives, or at server start.
+export const DEFAULT_RETRY = { baseMs: 2000, maxMs: 10 * 60 * 1000, maxAttempts: 12, jitter: 0.2, maxAgeMs: 7 * 24 * 3600 * 1000, maxRows: 10000 }
 const PEER_SUBS_TIMEOUT_MS = 3000
 
 export function openDb(dbPath) {
@@ -58,9 +63,23 @@ export function openDb(dbPath) {
       url TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       last_at TEXT,
-      last_status TEXT
+      last_status TEXT,
+      fail_count INTEGER NOT NULL DEFAULT 0,
+      next_at INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS outbox (
+      peer TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      hop INTEGER NOT NULL,
+      headers TEXT NOT NULL,
+      queued_at INTEGER NOT NULL,
+      PRIMARY KEY (peer, seq)
     );
   `)
+  // peers tables from an earlier build of this branch: add the backoff columns.
+  const peerCols = db.prepare('PRAGMA table_info(peers)').all().map(c => c.name)
+  if (!peerCols.includes('fail_count')) db.exec('ALTER TABLE peers ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0')
+  if (!peerCols.includes('next_at')) db.exec('ALTER TABLE peers ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0')
   db.function('regexp', { deterministic: true }, (pattern, value) => {
     if (value == null) return 0
     return new RegExp(pattern).test(value) ? 1 : 0
@@ -162,8 +181,14 @@ export function normalizePeerUrl(u) {
   return url.origin + url.pathname.replace(/\/+$/, '')
 }
 
+export function backoffMs(failures, { baseMs, maxMs, jitter }, rand = Math.random) {
+  const ms = Math.min(maxMs, baseMs * 2 ** Math.max(failures - 1, 0))
+  return Math.round(ms * (1 + jitter * (2 * rand() - 1)))
+}
+
 export function createApp({ db, webhookSecret, apiKey, now = () => new Date().toISOString(), log = console.error,
-  fetch = globalThis.fetch, forwardRetryMs = [2000, 10000, 30000, 60000, 120000] }) {
+  fetch = globalThis.fetch, retry = {} }) {
+  retry = { ...DEFAULT_RETRY, ...retry }
   if (!webhookSecret || !apiKey) throw new Error('webhookSecret and apiKey are required')
   const waiters = new Set()
   const insert = db.prepare(`
@@ -187,30 +212,95 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
     return rows
   }
 
-  const listPeers = () => db.prepare('SELECT name, url, updated_at, last_at, last_status FROM peers ORDER BY name').all()
-  const setPeerStatus = db.prepare('UPDATE peers SET last_at = ?, last_status = ? WHERE name = ?')
+  const listPeers = () => db.prepare(`SELECT p.name, p.url, p.updated_at, p.last_at, p.last_status, p.fail_count, p.next_at,
+      (SELECT COUNT(*) FROM outbox o WHERE o.peer = p.name) AS pending FROM peers p ORDER BY p.name`).all()
+    .map(p => ({ ...p, parked: p.fail_count >= retry.maxAttempts, next_at: p.next_at ? new Date(p.next_at).toISOString() : null }))
+  const getPeer = db.prepare('SELECT name, url, fail_count, next_at FROM peers WHERE name = ?')
+  const setPeerState = db.prepare('UPDATE peers SET last_at = ?, last_status = ?, fail_count = ?, next_at = ? WHERE name = ?')
+  const enqueue = db.prepare('INSERT OR IGNORE INTO outbox (peer, seq, hop, headers, queued_at) VALUES (?, ?, ?, ?, ?)')
+  const headOf = db.prepare(`SELECT o.seq, o.hop, o.headers, e.payload FROM outbox o JOIN events e ON e.seq = o.seq
+    WHERE o.peer = ? ORDER BY o.seq LIMIT 1`)
+  const dequeue = db.prepare('DELETE FROM outbox WHERE peer = ? AND seq = ?')
+  const pruneAge = db.prepare('DELETE FROM outbox WHERE peer = ? AND queued_at < ?')
+  const pruneRows = db.prepare('DELETE FROM outbox WHERE peer = ? AND seq NOT IN (SELECT seq FROM outbox WHERE peer = ? ORDER BY seq DESC LIMIT ?)')
+  const draining = new Map() // peer -> { again: boolean, probe: boolean } while a drain runs
+  const timers = new Map()
 
-  // Replicate a webhook to every peer as the same HTTP request; the peer checks the signature itself.
-  async function forward(peer, raw, headers, delivery, hop) {
+  function schedule(name, at) {
+    clearTimeout(timers.get(name))
+    const t = setTimeout(() => { timers.delete(name); kick(name) }, Math.max(at - Date.now(), 0))
+    t.unref?.()
+    timers.set(name, t)
+  }
+
+  // Start (or re-run) the drain of one peer's outbox. probe: try now even if parked or backing off.
+  function kick(name, { probe = false } = {}) {
+    const d = draining.get(name)
+    if (d) { d.again = true; d.probe ||= probe; return }
+    drain(name, probe).catch(err => log(`outbox ${name}: ${err.stack ?? err.message}`))
+  }
+
+  async function sendOnce(peer, row) {
+    const raw = Buffer.from(row.payload, 'utf8')
+    const h = JSON.parse(row.headers)
+    h[HOP_HEADER] = String(row.hop)
+    h[PEER_SIG_HEADER] = peerSignature(webhookSecret, { delivery: h['x-github-delivery'], event: h['x-github-event'], hop: row.hop }, raw)
+    try {
+      const r = await fetch(`${peer.url}/webhook/github`, { method: 'POST', headers: h, body: raw, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) })
+      await r.arrayBuffer().catch(() => {})
+      // 2xx: delivered (200 = the peer already had it). 4xx: the peer rejects it (bad signature, ...), and
+      // retrying won't help, so drop it. Anything else is a connectivity problem: back off.
+      return { status: String(r.status), done: r.status < 500, delivery: h['x-github-delivery'] }
+    } catch (e) {
+      return { status: `error: ${e.cause?.code ?? e.name ?? e.message}`, done: false, delivery: h['x-github-delivery'] }
+    }
+  }
+
+  async function drain(name, probe) {
+    const state = { again: false, probe: false }
+    draining.set(name, state)
+    try {
+      for (;;) {
+        const peer = getPeer.get(name)
+        if (!peer) return
+        const parked = peer.fail_count >= retry.maxAttempts
+        if (!probe && parked) return
+        if (!probe && peer.next_at > Date.now()) return schedule(name, peer.next_at)
+        const row = headOf.get(name)
+        if (!row) return
+        const res = await sendOnce(peer, row)
+        if (getPeer.get(name)?.url !== peer.url) continue // removed or re-joined meanwhile: start over
+        if (res.done) {
+          dequeue.run(name, row.seq)
+          setPeerState.run(now(), res.status, 0, 0, name)
+          log(`forward delivery=${res.delivery} -> ${name} ${res.status}`)
+          probe = false
+          continue
+        }
+        const failures = peer.fail_count + 1
+        const nextAt = failures >= retry.maxAttempts ? 0 : Date.now() + backoffMs(failures, retry)
+        setPeerState.run(now(), res.status, failures, nextAt, name)
+        log(`forward delivery=${res.delivery} -> ${name} ${res.status} (failure ${failures}/${retry.maxAttempts}${nextAt ? `, retry in ${Math.round((nextAt - Date.now()) / 1000)}s` : ', parked until it re-joins or a new webhook arrives'})`)
+        if (nextAt) schedule(name, nextAt)
+        return
+      }
+    } finally {
+      draining.delete(name)
+      if (state.again) kick(name, { probe: state.probe })
+    }
+  }
+
+  // Queue a stored webhook for every peer (durable), then send.
+  function replicate(seq, headers, hop) {
     const h = {}
     for (const k of FORWARD_HEADERS) if (headers[k] != null) h[k] = String(headers[k])
-    h[HOP_HEADER] = String(hop)
-    h[PEER_SIG_HEADER] = peerSignature(webhookSecret, { delivery, event: h['x-github-event'], hop }, raw)
-    let status = ''
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const r = await fetch(`${peer.url}/webhook/github`, { method: 'POST', headers: h, body: raw, signal: AbortSignal.timeout(PEER_TIMEOUT_MS) })
-        status = String(r.status)
-        await r.arrayBuffer().catch(() => {})
-        if (r.ok) break
-        if (r.status >= 400 && r.status < 500) break // the peer rejected it (bad signature, ...): retrying won't help
-      } catch (e) { status = `error: ${e.cause?.code ?? e.name ?? e.message}` }
-      if (attempt >= forwardRetryMs.length) break
-      await new Promise(resolve => setTimeout(resolve, forwardRetryMs[attempt]))
+    const json = JSON.stringify(h), t = Date.now()
+    for (const peer of db.prepare('SELECT name, fail_count FROM peers').all()) {
+      enqueue.run(peer.name, seq, hop, json, t)
+      const dropped = pruneAge.run(peer.name, t - retry.maxAgeMs).changes + pruneRows.run(peer.name, peer.name, retry.maxRows).changes
+      if (dropped) log(`outbox ${peer.name}: dropped ${dropped} old copies (max age ${retry.maxAgeMs / 3600000}h, max ${retry.maxRows})`)
+      kick(peer.name, { probe: peer.fail_count >= retry.maxAttempts })
     }
-    setPeerStatus.run(now(), status, peer.name)
-    log(`forward delivery=${delivery} -> ${peer.name} ${status}`)
-    return status
   }
 
   // Subscriptions of the peers, so `/bot <name>` counts a session listening on another box as a target.
@@ -287,9 +377,7 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
       log(`webhook ${event}.${e.action ?? '-'} ${e.repo ?? '-'}#${e.issue ?? '-'} delivery=${delivery} ${stored ? 'stored' : 'duplicate'}${hop ? ` (forwarded, hop ${hop})` : ''}`)
       // Relay on: a box's own webhook reaches the primary and through it the other boxes. Each server
       // forwards a delivery once (only when it is new here), so the flood ends; the sender just answers 200.
-      if (stored && hop < MAX_HOPS) {
-        for (const peer of listPeers()) forward(peer, raw, req.headers, String(delivery), hop + 1).catch(err => log(`forward ${peer.name}: ${err.message}`))
-      }
+      if (stored && hop < MAX_HOPS) replicate(Number(r.lastInsertRowid), req.headers, hop + 1)
       return send(res, stored ? 201 : 200, { stored, duplicate: !stored })
     }
 
@@ -357,21 +445,29 @@ export function createApp({ db, webhookSecret, apiKey, now = () => new Date().to
       if (typeof b.name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(b.name)) throw new HttpError(400, 'name ([A-Za-z0-9._-]{1,64}) required')
       if (req.method === 'PUT') {
         const peerUrl = normalizePeerUrl(b.url)
+        // A (re-)join means the peer is up: reset its backoff and send what queued up meanwhile.
         db.prepare(`INSERT INTO peers (name, url, updated_at) VALUES (?, ?, ?)
-          ON CONFLICT (name) DO UPDATE SET url = excluded.url, updated_at = excluded.updated_at,
+          ON CONFLICT (name) DO UPDATE SET url = excluded.url, updated_at = excluded.updated_at, fail_count = 0, next_at = 0,
             last_at = CASE WHEN peers.url = excluded.url THEN peers.last_at END,
             last_status = CASE WHEN peers.url = excluded.url THEN peers.last_status END`).run(b.name, peerUrl, now())
         log(`peer ${b.name} -> ${peerUrl}`)
+        clearTimeout(timers.get(b.name)); timers.delete(b.name)
+        kick(b.name, { probe: true })
         return send(res, 200, { ok: true, name: b.name, url: peerUrl })
       }
       if (req.method === 'DELETE') {
         const r = db.prepare('DELETE FROM peers WHERE name = ?').run(b.name)
+        db.prepare('DELETE FROM outbox WHERE peer = ?').run(b.name)
+        clearTimeout(timers.get(b.name)); timers.delete(b.name)
         return send(res, 200, { ok: true, removed: r.changes > 0 })
       }
     }
 
     throw new HttpError(404, 'not found')
   }
+
+  // After a restart, send what is still queued (each peer gets one try now, then its backoff applies).
+  for (const { peer } of db.prepare('SELECT DISTINCT peer FROM outbox').all()) kick(peer, { probe: true })
 
   return async (req, res) => {
     try {
@@ -421,7 +517,12 @@ function requireEnv(name) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const db = openDb(process.env.DB_PATH ?? '/data/events.db')
-  const app = createApp({ db, webhookSecret: requireEnv('WEBHOOK_SECRET'), apiKey: requireEnv('API_KEY') })
+  const num = name => process.env[name] ? Number(process.env[name]) : undefined
+  const retry = Object.fromEntries(Object.entries({
+    baseMs: num('PEER_RETRY_BASE_MS'), maxMs: num('PEER_RETRY_MAX_MS'), maxAttempts: num('PEER_RETRY_MAX_ATTEMPTS'),
+    maxAgeMs: num('PEER_OUTBOX_MAX_AGE_H') && num('PEER_OUTBOX_MAX_AGE_H') * 3600000, maxRows: num('PEER_OUTBOX_MAX_ROWS'),
+  }).filter(([, v]) => Number.isFinite(v) && v > 0))
+  const app = createApp({ db, webhookSecret: requireEnv('WEBHOOK_SECRET'), apiKey: requireEnv('API_KEY'), retry })
   const port = Number(process.env.PORT ?? 8787)
   const host = process.env.HOST ?? '0.0.0.0'
   const server = http.createServer(app)

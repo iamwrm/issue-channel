@@ -82,11 +82,12 @@ deploy/issue-channel.sh join https://<primary-hostname> laptop    # name default
 deploy/issue-channel.sh peers                                     # on either box: peers + last forward status
 ```
 
+- Peers live in the server's SQLite and are read on every webhook, so `join`, `leave` and `PUT/DELETE /api/peers` take effect at once on the running servers: no restart on either side.
 - `join` registers this box's URL on the primary, adds the primary as a peer here, and saves both in `deploy.env`. A quick tunnel gets a new URL on every start, so `up` (and `restart`) re-join with the new URL by themselves. `leave` undoes the join.
 - Pushing works both ways: a webhook that a joined box receives directly (say, a repo whose webhook points at the laptop's quick tunnel) goes to the primary, and the primary relays it to the other boxes.
 - **No loops:** a server forwards a delivery only the first time it stores it; a copy that comes back is a duplicate (`200`) and stops there. Copies carry a hop count (`X-Issue-Channel-Hop`), and nothing is relayed beyond 4 hops.
 - **Auth:** a copy keeps GitHub's `X-Hub-Signature-256` and adds `X-Issue-Channel-Signature`, an HMAC with the same `WEBHOOK_SECRET` over the delivery id, event, hop count and body. A receiver needs both, so a replayed GitHub request can't fake a copy, a hop count or a delivery id. `/api/peers` and the subscription lookups between boxes need `API_KEY`.
-- A failed copy is retried for about 4 minutes (2 s, 10 s, 30 s, 60 s, 120 s), except a 4xx answer (for example a box with another secret), which is recorded and not retried.
+- **Bad connectivity:** copies go through a durable outbox in SQLite, one sender per peer, in order. When a peer fails, the wait between tries doubles: 2 s, 4 s, 8 s, … up to 10 min, ±20 % jitter. Backoff is per peer, so a down peer costs one request per try, not one per queued copy. After 12 failures in a row (about 37 min) the peer is **parked**: no more timed tries, but its copies stay queued (up to 7 days or 10 000 per peer, the oldest are dropped first). A parked peer is tried again when it re-joins (`up` does that after a restart), once per new webhook, and at server start. The first answer drains its whole backlog. A 4xx answer (for example a box with another secret) drops that copy only. Copies also survive a server restart. Tune it with `PEER_RETRY_BASE_MS`, `PEER_RETRY_MAX_MS`, `PEER_RETRY_MAX_ATTEMPTS`, `PEER_OUTBOX_MAX_AGE_H` and `PEER_OUTBOX_MAX_ROWS` in `.env`. `deploy/issue-channel.sh peers` shows each peer's queue, failures and next try.
 - `/bot <name>` works across boxes: `GET /api/subscriptions` adds the peers' sessions (and their peers', 2 hops, 3 s timeout each, peers that are down are skipped), so a session listening on the laptop counts as a target on the primary too.
 - Without a server on the new box at all: set `ISSUECHAN_URL` to the primary's public URL (and `ISSUECHAN_API_KEY`). That's simpler, but the box then depends on the primary being up.
 
@@ -158,7 +159,7 @@ All `/api/*` routes need `Authorization: Bearer $API_KEY`.
 | `GET /api/events?repo=&issue=&event=&action=&author=&since=&timeout=` | same, query-string form |
 | `GET /api/events/:seq` | one event with its full payload |
 | `GET/PUT/DELETE /api/subscriptions` | session registry used for `/bot <name>`; `GET` also returns the peers' sessions (marked `peer: true`; `depth=0` for this server only) |
-| `GET/PUT/DELETE /api/peers` | `{name, url}`: servers this one copies each new webhook to, with the last forward status |
+| `GET/PUT/DELETE /api/peers` | `{name, url}`: servers this one copies each new webhook to; `GET` adds `pending`, `fail_count`, `parked`, `next_at` and the last status. `PUT` (re-join) resets the backoff and sends the backlog |
 
 Filter keys: `repo`, `issue`, `event`/`action`/`author` (a string or a list), `title`/`body` as `{contains|like|regex: "..."}`, and `exclude_body_contains`.
 
