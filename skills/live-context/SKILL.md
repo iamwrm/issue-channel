@@ -23,6 +23,7 @@ ctx apply    # checks the edit, then switches to it when this turn ends
 4. **Keep conversational units.** If a request is still relevant, keep its answer, or replace the answer with a short, specific summary in the same place. Don't keep requests while deleting all their answers, or the reverse: `apply` warns about both.
 5. Remove or shorten raw tool output first, once you have taken the facts from it. A shortened output is marked as trimmed.
 6. Keep decisions, constraints, open questions, file paths, commands still needed, test results, where conclusions came from, and the next action.
+   **Finished tasks are the big win.** When a task is done and its results are already stated in your replies, drop its exploration whole: the tool calls, their outputs and the reasoning blocks of those turns. Keep the request and your final reply (or a short summary in their place), and add one `[[NOTE]]` with what must survive: results, ids, file paths, commits, numbers. Trimming outputs alone saves little; old reasoning blocks cost almost nothing (see `session-fork/RESULTS.md`).
 7. Reasoning blocks (`kind=thinking`) are placeholders: keep or delete them, never edit them. Keep them unless the span around them goes.
 8. Add a note with a `[[NOTE]]` line followed by its text, preferably between turns. Replacing everything with one note is allowed when asked for, but it loses everything else.
 9. Never invent content in a summary. When unsure, keep the exact text.

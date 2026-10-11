@@ -76,3 +76,25 @@ test('the old channel/channel.mjs path (what ~/.claude.json runs) still starts t
     assert.equal(c.got[0].meta.trigger_comment, String(cid))
   } finally { await c.close() }
 })
+
+test('issue_rebind: a channel left on a fresh id (TUI /resume) takes over the real session\'s subscriptions', async () => {
+  const fresh = crypto.randomUUID(), real = crypto.randomUUID()
+  const { seq } = await api('GET', '/api/cursor')
+  fs.writeFileSync(path.join(t.stateDir, `cc-${real}.json`), JSON.stringify({
+    session: 'default', subs: { [`${REPO}#5`]: { repo: REPO, issue: 5, flushed: seq, open: [] } },
+  }))
+  const missed = await comment(5, '/bot posted while the channel was on the wrong id')
+  const c = await start(fresh)
+  try {
+    await sleep(600)
+    assert.equal(c.got.length, 0, 'on the fresh id nothing is delivered')
+    const list = await c.call('issue_subscriptions', {})
+    assert.match(list, new RegExp(`channel session: cc:${fresh}.*issue_rebind`, 's'), 'an empty list says how to fix it')
+    assert.match(await c.call('issue_rebind', { agent_id: 'bogus' }), /agent_id must be/)
+    assert.match(await c.call('issue_rebind', { agent_id: `cc:${real}` }), new RegExp(`rebound from cc:${fresh} to cc:${real}.*${REPO}#5`, 's'))
+    assert.ok(await until(() => c.got.length === 1), 'the /bot posted meanwhile is delivered from the saved cursor')
+    assert.equal(c.got[0].meta.trigger_comment, String(missed))
+    assert.match(await c.call('issue_rebind', { agent_id: `cc:${real}` }), /nothing to do/)
+    await c.call('issue_unsubscribe', { repo: REPO, issue: 5 })
+  } finally { await c.close() }
+})
