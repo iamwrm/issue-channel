@@ -1,6 +1,6 @@
 # issue-channel
 
-Talk to a running Claude Code session through a GitHub issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Design, decisions and validation: [`DESIGN.md`](DESIGN.md). Backlog (Codex support, hardening): [`BACKLOG.md`](BACKLOG.md).
+Talk to a running Claude Code, Codex or **Pi** session through a GitHub or Linear issue. Comment `/bot …` on an issue the session listens to. The comment, plus every new or edited comment since the last delivery, is pushed into the session, whether the agent is idle or busy. Pi receives native **steer** messages and shows a small listening marker in its TUI. Design, decisions and validation: [`DESIGN.md`](DESIGN.md). Backlog: [`BACKLOG.md`](BACKLOG.md).
 
 ```
 GitHub ──signed webhook──► Cloudflare tunnel ──► server (container, SQLite)
@@ -9,7 +9,7 @@ GitHub ──signed webhook──► Cloudflare tunnel ──► server (contain
 ```
 
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
-- `core/`: the harness-neutral issuechan MCP server (`issuechan.mjs`, pure logic in `lib.mjs`, `gh` calls in `github.mjs`). Each harness plugs in through a small adapter in `adapters/<harness>/` that says how a delivery enters the session (see [`adapters/README.md`](adapters/README.md)). Claude Code uses `adapters/claude-code/`: a [channel](https://code.claude.com/docs/en/channels-reference) ([session id, auto-resume and the `/resume` pitfall](adapters/claude-code/README.md)). Codex uses `adapters/codex/`: user input through the Codex app-server ([launch](adapters/codex/README.md)). `channel/channel.mjs` and `channel/reply-format.mjs` are shims for the old paths. The `issue_subscribe` / `issue_unsubscribe` / `issue_subscriptions` tools let the agent listen to issues, `issue_done` marks requests finished (👀 → 🚀), and `issue_reply` posts replies as a plain one-line summary prefixed with who wrote it (see [Reply format](#reply-format)), then a clickable **Full reply** toggle (`<details>`) with the full text, plus the bot marker. Comments carrying the `<!-- issue-channel:bot -->` marker, and comments by non-allowlisted authors, are ignored.
+- `core/`: the harness-neutral engine (`engine.mjs`, pure logic in `lib.mjs`, GitHub/Linear helpers), plus the MCP stdio wrapper (`issuechan.mjs`). Claude Code uses a [channel](https://code.claude.com/docs/en/channels-reference) ([setup and the `/resume` pitfall](adapters/claude-code/README.md)); Codex uses app-server user input ([setup](adapters/codex/README.md)); **Pi** uses a native extension with durable user steering ([setup and status marker](adapters/pi/README.md)). The same five issue tools manage subscriptions, replies and request completion. Replies carry bot markers and non-allowlisted authors are ignored. Legacy `channel/` paths remain shims.
 - `session-fork/session-fork.mjs`: fork a Claude Code session log into an edited copy that `claude --resume <id>` loads (CLM-style context editing, applied offline). `mirror` prints the session as numbered turns; `mirror --full` writes the whole context as an editable file (one block per prompt, reply, tool call, output or signed reasoning), and `fork <session> <live.md>` turns the edited file into the new session (`fork <session> <plan.json>` still replaces or drops whole turns, for dispatch); and `handoff` copies the issuechan subscription state to the fork. Used by the "replace myself" and "dispatch" prompts in `PROMPTS.md`; details in [`session-fork/README.md`](session-fork/README.md).
 - `spawn/spawn-agent.sh`: start a new agent in its own herdr tab, launched with the required `claude` flags, and have it listen to an issue under its own session name. See [`spawn/README.md`](spawn/README.md).
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
@@ -27,6 +27,8 @@ npm ci && node --test
 Then: [deploy the server](#deploy) (pick a tunnel), [add the webhook](#deploy) to each repo you want to talk through, and [connect Claude Code](#use-from-claude-code).
 
 For Codex or ChatGPT.app, use the [Codex adapter setup](adapters/codex/README.md), including the opt-in macOS launcher for local ChatGPT builds that start their own stdio app-server. The MCP tools loading does not by itself verify incoming delivery.
+
+For Pi 1.1.0+, install this checkout with `pi install "$ISSUECHAN_DIR"`, or try `pi -e "$ISSUECHAN_DIR/adapters/pi/index.ts"`. No MCP server is needed. See the [Pi adapter](adapters/pi/README.md) for GitHub/Linear subscriptions, `/bot` versus every-update mode, the compact TUI marker, verified startup flags and crash-safe resume.
 
 ## Deploy
 
@@ -163,7 +165,7 @@ Then say: *"create a new issue in <owner/repo> and listen to it"*. The repo need
 
 ### Agent skill
 
-[`skills/issue-channel/`](skills/issue-channel/SKILL.md) teaches an agent to work through issuechan reliably, on GitHub and Linear issues. It's the same `SKILL.md` format for Claude Code and Codex:
+[`skills/issue-channel/`](skills/issue-channel/SKILL.md) teaches an agent to work through issuechan reliably, on GitHub and Linear issues. It supports Claude Code, Codex and Pi; the Pi package manifest includes it:
 
 | Part | What |
 |---|---|
@@ -185,9 +187,9 @@ mkdir -p ~/.codex/skills  && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.co
 - A **newly created** comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order. Edits never trigger, including edits of a `/bot` comment. They wait in the buffer for the next `/bot`.
 - An edit of a comment the agent has already seen is delivered with a diff against the version the agent saw, plus the full new text. An edit that restores exactly what the agent saw is dropped. Deleting a comment the agent has already seen is reported. Deleting one it hasn't seen just drops it.
 - `/bot <name>` (a single token on the first line) targets a named session. If `<name>` is not an active session on that issue, the comment counts as untargeted (for example `/bot hi`).
-- Idle session: Claude starts a new turn. Busy session: the message lands after the current tool call, inside the same turn. Text Claude is already streaming is not interrupted.
+- Idle session: the harness starts a new turn. Busy session: the message is native steering (Pi) or the harness adapter's channel/steer mechanism. Executing tools and already-streaming text are not forcibly interrupted; long tool waits delay model handling.
 - Request lifecycle: 👀 when a `/bot` is delivered, 🚀 when the agent marks it done (`issue_reply` with `done` defaulting to true, or `issue_done`). Open requests are saved with the subscription. A deleted comment, or a 👀 that's already gone, is tolerated.
-- Subscriptions are saved per agent session (Claude Code: `CLAUDE_CODE_SESSION_ID`, in `~/.local/state/issue-channel/`). They are restored automatically after `/mcp` reconnect or `claude --resume`/`--continue`, from the last delivered trigger, so comments made while the channel was down are not lost. A new session starts with no subscriptions.
+- Subscriptions are saved per agent session in `~/.local/state/issue-channel/`. Claude Code uses `CLAUDE_CODE_SESSION_ID`; Pi uses the current session manager identity and a durable delivery inbox. Resume/reload restores the saved cursor, so offline updates are not lost. Fresh sessions start empty. Pi additionally supports explicit per-subscription `mode: "updates"`; the default `/bot` policy is unchanged.
 
 ### Reply format
 
@@ -197,6 +199,7 @@ Every reply starts with `🤖 <tag> · <summary>`, so replies from different ses
 |---|---|---|
 | `default` | Claude Code `c17a1e9d-…` | `🤖 cc:c17a1e9d · <summary>` |
 | `extract` | Claude Code `c17a1e9d-…` | `🤖 extract · cc:c17a1e9d · <summary>` |
+| `worker1` | Pi `c17a1e9d-…` | `🤖 worker1 · pi:c17a1e9d · <summary>` |
 | `extract` | none | `🤖 extract · <summary>` |
 | `default` | none | `🤖 <summary>` |
 
@@ -230,4 +233,6 @@ curl -s -H "Authorization: Bearer $API_KEY" "$(deploy/issue-channel.sh url)/api/
 
 ```sh
 npm ci && node --test   # in the issue-channel checkout: server (incl. peers), core, adapters, session-fork
+npm run check          # strict Pi extension typecheck
+npm run test:pi        # durable inbox and actual-Pi model-free acceptance tests
 ```

@@ -130,6 +130,29 @@ test('markDelivered seeds diff bases after a restart', () => {
   assert.equal(b.drain()[0].previous, 'v2')
 })
 
+test('buffer clone is an independent rollback checkpoint, including edit-back mutation', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  b.add(c(1, 10, 'original'))
+  b.drain()
+  b.add(c(2, 10, 'changed', 'edited'))
+  const before = b.clone()
+  b.add(c(3, 10, 'original', 'edited'))
+  assert.equal(b.peek().length, 0)
+  assert.equal(before.peek()[0].body, 'changed')
+  before.drain()
+  assert.equal(b.delivered.get('comment:10'), 'original')
+})
+
+test('updates formatting has no invented /bot and replay filters bot issue bodies', () => {
+  const b = new IssueBuffer({ allowedAuthors: ['me'] })
+  b.markDelivered({ ...c(1, 10, `reply ${BOT_MARKER}`), event: 'issues', action: 'edited' })
+  assert.equal(b.delivered.has('issue'), false)
+  b.add(c(2, 11, 'ordinary'))
+  const content = formatDelivery({ repo: 'me/r', issue: 1, title: null, trigger: null, items: b.peek() })
+  assert.match(content, /issue update/)
+  assert.doesNotMatch(content, /\/bot from/)
+})
+
 test('lineDiff', () => {
   assert.equal(lineDiff('a\nb\nc', 'a\nB\nc'), '  a\n- b\n+ B\n  c')
 })
