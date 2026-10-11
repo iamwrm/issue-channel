@@ -29,8 +29,11 @@ export function readLog(path) {
 
 const isToolResult = (e) =>
   e.type === 'user' && Array.isArray(e.message?.content) && e.message.content.some((c) => c.type === 'tool_result');
-// Text Claude Code injects inside a turn (a loaded skill's body: isMeta + sourceToolUseID) is not a new prompt.
-const isTurnStart = (e) => e.type === 'user' && !isToolResult(e) && !e.isSidechain && !e.isMeta && !e.sourceToolUseID;
+// Text Claude Code injects inside a turn is not a new prompt: a loaded skill's body (sourceToolUseID), or other
+// meta text without an origin (an image attached to a tool result). Channel deliveries are meta too, but have
+// origin.kind "channel", and they do start a turn.
+const isTurnStart = (e) =>
+  e.type === 'user' && !isToolResult(e) && !e.isSidechain && !e.sourceToolUseID && (!e.isMeta || Boolean(e.origin?.kind));
 
 // Main chain: walk parentUuid back from the last chain entry.
 export function mainChain(entries) {
@@ -38,7 +41,27 @@ export function mainChain(entries) {
   const last = [...entries].reverse().find((e) => CHAIN_TYPES.has(e.type) && e.uuid && !e.isSidechain);
   const chain = [];
   for (let e = last; e; e = e.parentUuid ? byId.get(e.parentUuid) : null) chain.push(e);
-  return chain.reverse();
+  chain.reverse();
+  // Parallel tool calls: Claude Code chains the tool_use entries (use1 → use2 → use3), but each result's parent is
+  // its own tool_use and only the last result continues the chain. Put the sibling results back, in call order,
+  // right before the result that is on the chain.
+  const onChain = new Set(chain.map((e) => e.uuid));
+  const results = new Map(); // tool_use entry uuid → off-chain tool_result entries
+  for (const e of entries) if (isToolResult(e) && !onChain.has(e.uuid) && onChain.has(e.parentUuid) && !e.isSidechain) {
+    if (!results.has(e.parentUuid)) results.set(e.parentUuid, []);
+    results.get(e.parentUuid).push(e);
+  }
+  if (!results.size) return chain;
+  const out = [];
+  for (const e of chain) {
+    if (isToolResult(e)) {
+      const run = [];
+      for (let i = out.length - 1; i >= 0 && out[i].type === 'assistant'; i--) run.unshift(out[i]);
+      for (const u of run) for (const r of results.get(u.uuid) || []) if (r.uuid !== e.uuid) out.push(r);
+    }
+    out.push(e);
+  }
+  return out;
 }
 
 // Turns: turn 0 is the preamble before the first prompt; each later turn starts at a prompt.
