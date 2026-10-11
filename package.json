@@ -4,15 +4,46 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "description": "issuechan: MCP server that pushes /bot GitHub issue comments into a running agent session (Claude Code adapter; more harnesses in adapters/)",
+  "description": "Issue-channel for Claude Code, Codex and Pi: GitHub/Linear subscriptions, native steering and threaded replies",
   "engines": {
     "node": ">=24"
   },
+  "pi": {
+    "extensions": [
+      "adapters/pi/index.ts"
+    ],
+    "skills": [
+      "skills/issue-channel"
+    ]
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.1.0",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check": "tsc --noEmit",
+    "test:pi": "node --test adapters/pi/*.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
     "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@types/node": "24.10.1",
+    "typebox": "1.3.27",
+    "typescript": "5.9.3"
   }
 }

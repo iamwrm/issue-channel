@@ -37,6 +37,16 @@ export class IssueBuffer {
     return login != null && this.allowed.has(login.toLowerCase())
   }
 
+  // Transaction checkpoint: a failed durable-inbox acceptance must undo add(),
+  // not merely leave peek() undrained (an edit can remove buffered context).
+  clone() {
+    const copy = new IssueBuffer({ allowedAuthors: [...this.allowed] })
+    copy.items = new Map(this.items)
+    copy.delivered = new Map(this.delivered)
+    copy.title = this.title
+    return copy
+  }
+
   // Returns a trigger object when this event should flush the buffer, else null.
   // Only newly created /bot comments trigger; edits just update the buffer.
   add(ev) {
@@ -44,6 +54,7 @@ export class IssueBuffer {
     if (ev.event === 'issue_comment') {
       const key = `comment:${ev.comment_id}`
       if (ev.action === 'deleted') {
+        if (!this.allowedAuthor(ev.author) || isBotBody(ev.body) || ev.bot_actor) return null
         this.items.delete(key)
         // Tell the agent when a comment it has already seen disappears.
         if (this.delivered.has(key)) {
@@ -85,7 +96,7 @@ export class IssueBuffer {
       else if ((ev.action === 'created' || ev.action === 'edited') && this.allowedAuthor(ev.author) && !isBotBody(ev.body) && !ev.bot_actor) {
         this.delivered.set(key, ev.body ?? '')
       }
-    } else if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened') && this.allowedAuthor(ev.author)) {
+    } else if (ev.event === 'issues' && (ev.action === 'edited' || ev.action === 'opened') && this.allowedAuthor(ev.author) && !isBotBody(ev.body) && !ev.bot_actor) {
       this.delivered.set('issue', ev.body ?? '')
     }
     if (ev.title) this.title = ev.title
@@ -171,8 +182,9 @@ export function formatReply({ summary, body, tag, format = 'github' }) {
 }
 
 export function formatDelivery({ repo, issue, title, trigger, items }) {
-  const head = `${issueLabel(repo, issue)}${title ? ` "${title}"` : ''}: /bot from @${trigger.author}` +
-    (trigger.target ? ` (to session ${trigger.target})` : '') + (trigger.parent_id ? ` (in the thread of comment ${trigger.parent_id}; issue_reply answers in that thread)` : '')
+  const head = `${issueLabel(repo, issue)}${title ? ` "${title}"` : ''}: ` + (trigger
+    ? `/bot from @${trigger.author}` + (trigger.target ? ` (to session ${trigger.target})` : '') + (trigger.parent_id ? ` (in the thread of comment ${trigger.parent_id}; issue_reply answers in that thread)` : '')
+    : 'issue update')
   const parts = items.map(it => {
     const label = it.kind === 'issue'
       ? `[issue body · @${it.author} · ${it.action}]`
