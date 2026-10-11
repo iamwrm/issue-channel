@@ -3,7 +3,8 @@
 
 export default {
   name: 'claude-code',
-  // Claude Code passes its session id to MCP servers; it survives /mcp reconnect and --resume.
+  // Claude Code passes its session id to MCP servers when it spawns them (`--resume` on the command line or /mcp
+  // reconnect). A /resume inside the TUI does not respawn them, so the id goes stale: see README.md.
   agentEnv: [['cc', 'CLAUDE_CODE_SESSION_ID']],
   capabilities: { experimental: { 'claude/channel': {} } },
   arrival: 'Messages arrive as <channel source="issuechan" repo="..." issue="..." ...>.',
