@@ -1,11 +1,13 @@
 ---
 name: issue-channel
-description: Work reliably through issue-channel (issuechan) on GitHub and Linear issues. Use whenever a <channel source="issuechan"> message or a native Pi [issue-channel delivery=...] user message arrives, when replying on, listening to, consolidating, closing or cleaning up an issue, reading attachments, or when the user mentions /bot, a home issue, a Linear ref like ENG-123, or restarting yourself.
+description: Work reliably through issue-channel (issuechan) on GitHub and Linear issues. Use whenever a <channel source="issuechan"> message or a native Pi [issue-channel delivery=...] user message arrives, when replying on, listening to, consolidating, closing or cleaning up an issue, reading attachments, or when the user mentions /bot, a home issue, a Linear ref like ENG-123, or wrapping up, exiting or restarting yourself.
 ---
 
 # issue-channel
 
 issuechan pushes the user's `/bot` comments from GitHub issues and Linear issues into this session, and its tools post your answers back. Most mistakes are about *which* request you mark done, *where* the answer goes, and *what* you delete. The rules below prevent them.
+
+Resolve `scripts/...` and `reference/...` from **this skill directory**, not the current working directory or repository root. `$ISSUECHAN_DIR` denotes the issue-channel checkout.
 
 ## Refs
 
@@ -55,6 +57,14 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 - The agent acts as the user by default (`LINEAR_ACTOR=user` in `linear.env`): its replies, 👀 and ✅ show as the user, and Linear doesn't notify the user about them. The marker keeps them out of your own input.
 - `scripts/linear.mjs` covers what the MCP tools don't: `create`, `issue`, `comment`, `edit-comment`, `delete-comment`, `set-description`, `set-state`, `whoami`. Don't hand-write GraphQL for these.
 - More in [reference/linear.md](reference/linear.md).
+
+## Wrapping up and exiting Pi
+
+- Exit only when the user asks; completing a task does not authorize shutdown. Close only the requested work issue, never a home inbox. Await the final issue reply and mark only its exact `trigger_comment` done before arming exit.
+- When the user chooses **Herdr CLI + Ctrl-D**, follow [the Pi exit procedure](reference/pi-exit.md). Use a separate controller or detached helper that waits explicitly for `idle`/`done`, then sends `ctrl+d` to the verified Pi target. Never block a tool on its own Pi becoming idle.
+- Require the **main editor to be empty**, with no dialog/menu or pending work. Do not clear a user's draft automatically. Timeout, `blocked`, `unknown`, or a missing/replaced target means leave it running; never fall back to killing the Pi PID.
+- A fixed sleep is not a completion barrier. Do not send Ctrl-D during active inference, store a context in a shutdown timer, or claim exit succeeded merely because the helper was launched. Verify return to the shell from the controller; the exiting agent can report only that exit was armed.
+- This route needs no upstream Pi edits or new shutdown extension. For recovery, preserve the session file and resume explicitly; exit does not silently restart or transfer subscriptions.
 
 ## Restarting or compacting yourself
 

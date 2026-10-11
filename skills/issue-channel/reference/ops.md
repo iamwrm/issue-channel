@@ -16,9 +16,15 @@ for p in $(pgrep -f 'adapters/claude-code/channel.mjs'); do
 done
 ```
 
-## Restart or compact yourself
+## Exiting Pi with Herdr
 
-Use `spawn/restart-agent.sh` (never hand-roll `/exit` + `--resume`). It waits until the agent is idle, so an agent can run it **on itself**, detached, as the last step of a turn:
+For a user-requested Pi wrap-up, use [wait for idle, then Ctrl-D](pi-exit.md). Its controller must run separately or detached, with an explicit target and timeout; do not kill an active Pi or run the Claude restart script on it.
+
+<a id="restart-or-compact-yourself"></a>
+
+## Restart or compact yourself (Claude Code only)
+
+The following script and session-fork procedure are **for Claude Code, not Pi**. Use `spawn/restart-agent.sh` (never hand-roll `/exit` + `--resume`). It waits until the agent is idle, so a Claude agent can run it **on itself**, detached, as the last step of a turn:
 
 ```sh
 # plain restart in place: same session and context, the channel reloads with the current code
