@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Linear operations the issuechan tools don't cover, with the channel's credentials (linear.env).
+//   linear.mjs --help                                  usage without credentials or API calls
 //   linear.mjs whoami
 //   linear.mjs issue ENG-123 [--body-data] [--json]        description + every comment (full ids, threads)
 //   linear.mjs comment ENG-123 (--file F | --body TEXT) [--parent ID] [--no-marker]
@@ -13,12 +14,32 @@ import fs from 'node:fs'
 import { gql, viewer } from '../../../core/linear.mjs'
 import { LINEAR_MARKER } from '../../../core/lib.mjs'
 
+const HELP = `Usage: linear.mjs <command> [arguments] [options]
+
+Commands:
+  whoami
+  issue ENG-123 [--body-data] [--json]
+  comment ENG-123 (--file F | --body TEXT) [--parent ID] [--no-marker]
+  edit-comment ID (--file F | --body TEXT) [--no-marker]
+  delete-comment ID [ID ...]
+  set-description ENG-123 --file F
+  set-state ENG-123 <state name|type|in-progress>
+  create ENG --title T [--description D | --file F] [--state in-progress]
+
+Issue refs: ENG-123, linear:ENG#123, or a Linear issue URL.
+States: in-progress, completed, canceled, started, backlog, unstarted,
+  or a team state name (quote names containing spaces).
+Comments include the invisible issue-channel bot marker unless --no-marker is set.
+Credentials: ISSUECHAN_LINEAR_ENV_FILE, default ~/.local/share/issue-channel/linear.env.
+Help: --help, -h, or help (also <command> --help); no credentials or API calls required.`
+
 const [cmd, ...rest] = process.argv.slice(2)
 const flags = {}, args = []
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith('--')) {
+  if (rest[i] === '-h') flags.help = true
+  else if (rest[i].startsWith('--')) {
     const k = rest[i].slice(2)
-    if (['body-data', 'json', 'no-marker'].includes(k)) flags[k] = true
+    if (['body-data', 'json', 'no-marker', 'help'].includes(k)) flags[k] = true
     else flags[k] = rest[++i]
   } else args.push(rest[i])
 }
@@ -123,6 +144,9 @@ const commands = {
 }
 
 if (isMain(import.meta.url)) {
-  const run = commands[cmd] ?? (() => die(`unknown command "${cmd ?? ''}"; see the header of this file`))
-  run(args).catch(e => die(e.message))
+  if (!cmd || ['--help', '-h', 'help'].includes(cmd) || flags.help) console.log(HELP)
+  else {
+    const run = commands[cmd] ?? (() => die(`unknown command "${cmd}"; run linear.mjs --help`))
+    run(args).catch(e => die(e.message))
+  }
 }
