@@ -44,7 +44,9 @@ if (cmd === 'open') {
 } else if (cmd === 'apply') {
   const file = current();
   // The report needs the first request of the new context, so the resumed agent runs it itself.
-  const report_ = 'Run `node ~/.claude/skills/live-context/scripts/ctx.mjs report` and include its table, unchanged, wherever you report this switch.';
+  // The new session's first request is written to its log only after it completes, so the report
+  // needs one earlier tool call in the new session (any quick one) to have something to measure.
+  const report_ = 'After your first tool call in this turn, run `node ~/.claude/skills/live-context/scripts/ctx.mjs report` and include its table, unchanged, wherever you report this switch.';
   const then = `${opt('--then') ?? 'Your working context was just replaced by the edited version from `ctx apply`. Continue where you left off.'}\n\n${report_}`;
   const name = opt('--name');
   // Check now, so a mistake is reported in this turn instead of after the switch.
@@ -113,7 +115,7 @@ export function switchReport(id, from) {
   const rows = [
     ['Session', `${rec.from.slice(0, 8)} → ${id.slice(0, 8)}`],
     ['Context before (last request of the old session)', `${b.toLocaleString('en-US')} tokens (${hkt(before.timestamp)})`],
-    ['Context after (first request of the new session)', a == null ? 'not measured yet: run `ctx report` again after this turn' : `${a.toLocaleString('en-US')} tokens (${hkt(after.timestamp)})`],
+    ['Context after (first request of the new session)', a == null ? 'not measured yet: the new session\'s first request is written to its log only when it completes; run `ctx report` again after one more tool call' : `${a.toLocaleString('en-US')} tokens (${hkt(after.timestamp)})`],
     ...(a == null ? [] : [['Change', pct(b, a)]]),
     ...(e ? [['Edit', `kept ${e.kept}/${e.blocks} blocks, trimmed ${e.edited}, removed ${e.dropped}, notes ${e.notes}${e.handoff ? ' (summary only)' : ''}`]] : []),
     ...(rec.seconds ? [['Switch time', `${rec.seconds} s`]] : []),

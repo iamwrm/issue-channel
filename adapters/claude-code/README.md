@@ -34,9 +34,9 @@ Reproduced in a throwaway session with an MCP probe that logs `CLAUDE_CODE_SESSI
 
 ### Avoid it
 - **Resume from the shell:** `clauded … --resume <session-id>` (or `spawn/spawn-agent.sh --resume <id>`, or `spawn/restart-agent.sh`). The MCP server is then spawned with the right id and auto-resumes.
-- **If you did use `/resume` in the TUI:** run `/mcp` → `issuechan` → **Reconnect** right away. The new server process gets the resumed id, reads `cc-<id>.json` and resumes every subscription from its saved cursor, including `/bot`s posted in between.
+- **If you did use `/resume` in the TUI:** call `issue_rebind` with `agent_id: "cc:$CLAUDE_CODE_SESSION_ID"` (the id from your shell). The channel stops, starts again under that id, and resumes its saved subscriptions from their cursors. Or run `/mcp` → `issuechan` → **Reconnect**. The new server process gets the resumed id, reads `cc-<id>.json` and resumes every subscription from its saved cursor, including `/bot`s posted in between.
 
 ### Check after any restart or resume
 1. Call `issue_subscriptions`. An empty or short list right after a resume means the channel is on the wrong id.
 2. Compare the id in the reply tag (or `tr '\0' '\n' < /proc/<channel pid>/environ | grep CLAUDE_CODE_SESSION_ID`) with the conversation's id (`$CLAUDE_CODE_SESSION_ID` in the agent's own shell).
-3. Fix with `/mcp` → Reconnect. Calling `issue_subscribe` again also restores listening, but under the wrong id it starts from **now**: `/bot`s posted while it was down are skipped. Read each issue's recent comments and answer any that are unanswered.
+3. Fix with `issue_rebind` (or `/mcp` → Reconnect). When `issue_subscriptions` comes back empty, it now prints the channel's id and this hint. Calling `issue_subscribe` again also restores listening, but under the wrong id it starts from **now**: `/bot`s posted while it was down are skipped. Read each issue's recent comments and answer any that are unanswered.

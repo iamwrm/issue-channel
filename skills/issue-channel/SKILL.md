@@ -70,6 +70,8 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 
 On **Claude Code**, compact with the **live-context** skill (`ctx open` → edit → `ctx apply`) and plain-restart with `spawn/restart-agent.sh`, detached, with `--then`. Rules: [reference/ops.md](reference/ops.md#restart-or-compact-yourself).
 
+**After any restart or resume on Claude Code**, read your id with `echo $CLAUDE_CODE_SESSION_ID` and call `issue_rebind` with `agent_id: "cc:<that id>"` (a no-op when it already matches), then `issue_subscriptions`. A session started fresh and switched with `/resume` in the TUI keeps the fresh id in its channel and silently listens to nothing; rebinding resumes your saved subscriptions from their cursors, so `/bot`s posted meanwhile are still delivered.
+
 On **Pi**, use Pi's supported context editor/compaction owner and session commands instead. `/reload` restores this session's listener; explicit Pi resume restores its durable subscriptions. A fresh session/fork has no automatic subscription takeover: explicitly subscribe if wanted. **Never run the Claude session-fork/restart scripts on a Pi log.** See [Pi lifecycle and recovery](../../adapters/pi/README.md).
 
 ## Operating the channel

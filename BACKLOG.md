@@ -4,25 +4,31 @@ Open work, with stable ids that issues link to ([D14](docs/DECISIONS.md#d14-the-
 
 | Id | Item | Status |
 |---|---|---|
-| B1 | [Subscriptions lost after `/resume` inside the TUI](#b1-subscriptions-lost-after-resume-inside-the-tui) | Open |
-| B2 | [`ctx report` right after the switch](#b2-ctx-report-right-after-the-switch) | Small |
-| B3 | [Stronger self-compaction](#b3-stronger-self-compaction) | Idea |
+| B1 | [Subscriptions lost after `/resume` inside the TUI](#b1-subscriptions-lost-after-resume-inside-the-tui) | Done 2026-10-11 (agent-side fix) |
+| B2 | [`ctx report` right after the switch](#b2-ctx-report-right-after-the-switch) | Done 2026-10-11 |
+| B3 | [Stronger self-compaction](#b3-stronger-self-compaction) | Done 2026-10-11 |
 | B4 | [Restart and live-context for Codex and pi](#b4-restart-and-live-context-for-codex-and-pi) | Planned |
 | B5 | [Agent spawning beyond restart and compaction](#b5-agent-spawning-beyond-restart-and-compaction) | Not specified |
-| B6 | [Rebuild the server image from `main`](#b6-rebuild-the-server-image-from-main) | Optional |
+| B6 | [Rebuild the server image from `main`](#b6-rebuild-the-server-image-from-main) | Done 2026-10-11 |
 | B7 | [Codex support via app-server bridge](#b7-codex-support-via-app-server-bridge-turnstart--turnsteer) | Design |
 | B8 | [Codex GUI live test](#b8-codex-gui-live-test-managed-daemon-done) | Done 2026-10-11 |
 | B9 | [Hardening](#b9-hardening) | Open |
 
 ## B1. Subscriptions lost after `/resume` inside the TUI
 
+**Done 2026-10-11:** new tool `issue_rebind` (`agent_id: "cc:<id>"`) switches a running channel to the agent's real session id and resumes that id's subscriptions from their saved cursors; an empty `issue_subscriptions` prints the channel's id and the hint; the skill says to rebind after any restart. Not automatic: the channel can't see a TUI `/resume` by itself.
+
 A Claude Code session started fresh and then switched with `/resume` to an older conversation keeps the fresh session id in its issuechan channel, so the channel loads the fresh (empty) subscription state while the conversation continues under the old id. Seen three times on 2026-10-10/11 (bot_01 after a reboot, bot_02, bot_01 again). `restart-agent.sh` is not affected (it starts the process with `--resume <id>`). Details: [iamwrm/mainbot#43](https://github.com/iamwrm/mainbot/issues/43) and [`adapters/claude-code/README.md`](adapters/claude-code/README.md). Until it's fixed: after any restart, run `issue_subscriptions` and resubscribe from the old `cc-<id>.json`.
 
 ## B2. `ctx report` right after the switch
 
+**Done 2026-10-11:** the `--then` text asks for the report after the first tool call, and the "not measured yet" message says why and what to do.
+
 The new session's first request is only written to its log when it finishes, so `ctx report` run as the very first command after the switch says "not measured yet"; a second run a moment later works. Change the message to "run it again in a moment", and have the `--then` text ask for the report after one tool call.
 
 ## B3. Stronger self-compaction
+
+**Done 2026-10-11:** the live-context skill now says finished tasks are the big win (drop their exploration whole, keep request + final reply + one note). Realistic test: 53,933 → 40,247 tokens (−25%, close to the ~40k fixed floor), all facts recalled ([RESULTS.md](session-fork/RESULTS.md#ctx-runs)).
 
 The compactions so far kept every request and reply and only trimmed tool output (−45%, then −7%; dropping 190 reasoning blocks saved almost nothing). Larger savings need finished exploratory turns dropped whole, with one `[[NOTE]]` per finished task (results, PRs, commits). Add that as guidance to the live-context skill, with a realistic test.
 
@@ -35,6 +41,8 @@ The compactions so far kept every request and reply and only trimmed tool output
 Open topic from Linear REN-108; not specified yet.
 
 ## B6. Rebuild the server image from `main`
+
+**Done 2026-10-11:** built from `78795be` and restarted; `/app/server.mjs` now matches `main` (it lacked only #7's is-main check). Health checks pass locally and publicly.
 
 Not needed for any change so far; optional so the running image matches `main`.
 

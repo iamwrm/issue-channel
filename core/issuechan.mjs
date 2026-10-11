@@ -60,12 +60,32 @@ export async function runIssuechan(adapter) {
     log(`bound${fromCall ? '' : ' at start'} to ${agent.agent}:${agent.id}`)
     if (fromCall) adapter.onBind?.(agent, { stateDir })
   }
+  // A harness can switch conversations without respawning this process (Claude Code's /resume in the TUI keeps
+  // the env id of the fresh session it started with). The agent knows its real id; rebinding stops the engine
+  // and starts a new one under that id, which resumes that id's saved subscriptions from their cursors.
+  const REBIND_TOOL = { name: 'issue_rebind',
+    description: 'Point this channel at your current session id after a restart or /resume, so it uses that session\'s saved subscriptions (resumed from their cursors). Pass agent_id as "<tag>:<id>", e.g. "cc:" + $CLAUDE_CODE_SESSION_ID from your shell. A no-op if it already matches.',
+    inputSchema: { type: 'object', properties: { agent_id: { type: 'string' } }, required: ['agent_id'] } }
+  async function rebind(agentId) {
+    const a = resolveAgent({ ISSUECHAN_AGENT_ID: String(agentId ?? '') })
+    if (!a || !adapter.agentEnv?.some(([tag]) => tag === a.agent)) throw new Error(`agent_id must be "<tag>:<id>" with a tag this harness uses (${(adapter.agentEnv ?? []).map(([t]) => t).join(', ') || 'none'})`)
+    if (agent && a.agent === agent.agent && a.id === agent.id) return `already bound to ${a.agent}:${a.id}; nothing to do`
+    const from = agent ? `${agent.agent}:${agent.id}` : '-'
+    const had = engine ? engine.getStatus().subscriptions.length : 0
+    if (engine) { await engine.stop(); engine = undefined }
+    if (closed) throw new Error('issue engine stopped')
+    agent = a
+    log(`rebound from ${from} to ${a.agent}:${a.id}`)
+    await getEngine().start()
+    const now = engine.getStatus().subscriptions
+    return `rebound from ${from} to ${a.agent}:${a.id}. Subscriptions under the old id: ${had} (left in its state file). Now: ${now.length}${now.length ? ' (' + now.map(s => `${s.repo}#${s.issue}`).join(', ') + ')' : ''}, resumed from their saved cursors.`
+  }
   function serialized(fn) {
     const result = dispatch.then(fn)
     dispatch = result.catch(() => {})
     return result
   }
-  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: ISSUE_TOOLS }))
+  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: adapter.agentEnv?.length ? [...ISSUE_TOOLS, REBIND_TOOL] : ISSUE_TOOLS }))
   mcp.setRequestHandler(CallToolRequestSchema, req => serialized(async () => {
     try {
       if (closed) throw new Error('issue engine stopped')
@@ -74,7 +94,13 @@ export async function runIssuechan(adapter) {
       // including first-call creation, until the MCP channel listener is ready.
       await ready
       if (closed) throw new Error('issue engine stopped')
-      return await getEngine().callTool(req.params.name, req.params.arguments ?? {})
+      if (req.params.name === 'issue_rebind' && adapter.agentEnv?.length)
+        return { content: [{ type: 'text', text: await rebind(req.params.arguments?.agent_id) }] }
+      const result = await getEngine().callTool(req.params.name, req.params.arguments ?? {})
+      // An empty list right after a restart usually means a stale id (see issue_rebind).
+      if (req.params.name === 'issue_subscriptions' && agent && adapter.agentEnv?.length && !engine.getStatus().subscriptions.length && !result.isError)
+        result.content = [{ type: 'text', text: `${result.content?.[0]?.text ?? ''}\nchannel session: ${agent.agent}:${agent.id}. If your shell's session id differs (e.g. $CLAUDE_CODE_SESSION_ID after a /resume), call issue_rebind with agent_id "${agent.agent}:<that id>".` }]
+      return result
     } catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] } }
   }))
   mcp.onclose = () => { closed = true; clearTimeout(timer); void engine?.stop() }

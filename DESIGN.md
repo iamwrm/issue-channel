@@ -108,7 +108,7 @@ Decided 2026-10-10 ([D8](docs/DECISIONS.md#d8-self-compaction-goes-through-the-n
 
 **What pi-clm does differently.** In pi-clm the harness itself declares, from the first turn, that "the file named in Editable context is the exact conversation you will see"; the extension owns and refreshes that file; and the rules say never to print it whole. In the setup we compared, pi-clm also ran on a non-Anthropic model, so the safeguard never saw it.
 
-**What we built.** The [`live-context`](skills/live-context/SKILL.md) skill adopts pi-clm's framing and rules. The agent asks a tool (`ctx open`) for "its working context as a file", tidies it with one script without printing it, and calls `ctx apply`. It never names or reads a session log; reasoning appears only as a keep-or-delete placeholder. Under the hood `ctx` uses `session-fork` and `restart-agent.sh`. It has run 8 times (5 test agents, 3 times on a long-running agent) with no safeguard stop.
+**What we built.** The [`live-context`](skills/live-context/SKILL.md) skill adopts pi-clm's framing and rules. The agent asks a tool (`ctx open`) for "its working context as a file", tidies it with one script without printing it, and calls `ctx apply`. It never names or reads a session log; reasoning appears only as a keep-or-delete placeholder. Under the hood `ctx` uses `session-fork` and `restart-agent.sh`. It has run 9 times (6 test agents, 3 times on a long-running agent) with no safeguard stop.
 
 **Limits.** This is evidence, not a guarantee: the safeguard's behaviour can change. Don't retry or reword around a stop; report it.
 

@@ -31,7 +31,7 @@ Every edit type resumed without an API error. What the resumed model made of it:
 | Route | Runs | Stopped by the model's safeguard |
 |---|---|---|
 | Agent runs `session-fork mirror --full` on its own session | 3 (2 toy, 1 realistic) | **3 of 3** (`[reasoning_extraction]`), while it was still writing the command |
-| `live-context` skill (`ctx open / apply`) | 8 (5 test agents, 3 times on bot_01) | **0** |
+| `live-context` skill (`ctx open / apply`) | 9 (6 test agents, 3 times on bot_01) | **0** |
 
 ## `ctx` runs
 
@@ -44,6 +44,7 @@ Token counts marked "API" come from `ctx report` or the same usage fields; other
 | S3 · 10-11 08:56 | failing tests → find the breaking commit with git → fix and commit; README side question | kept 17/22, trimmed 7, removed 5 | 51,925 → 42,554 · 21 s | bad commit, bug and fix recalled; side question gone ✅ |
 | s3b · 10-11 14:13 | S3 again, report with `ctx report` | kept 19/24, trimmed 7, removed 5 | 51,055 → 41,008 (−20%) · 17 s | ⚠️ an edit script emptied the file once; apply accepted it and two switches raced → D11 |
 | s3c · 10-11 14:21 | S3 again after the D11 fixes | kept 19/24, trimmed 3, removed 5 | 46,968 → 40,746 (−13%) · 20 s | posted the `ctx report` table unprompted ✅ |
+| b3 · 10-11 15:16 | payments incident triage, revenue/refund table per region, INCIDENT.md; then "all three are finished, compact, keep what follow-ups need" (with the B3 guidance) | kept 6/31, trimmed 0, removed 25, notes 2 | 53,933 → 40,247 (−25%) · 20 s | window, error, count (289), cause and eu refund rate (10.28%) all recalled correctly ✅; ~40k is about the fixed floor |
 | bot_01 #1 · 10-11 09:05 | the long-running agent itself | kept 544/544, trimmed 76 | — | ❌ the switch got stuck behind a dialog → D12 |
 | bot_01 #2 · 10-11 09:19 | same, retry | kept 732/732, trimmed 103 | 429,254 → 235,433 (−45%) · 22 s | ✅ recall check passed |
 | bot_01 #3 · 10-11 14:27 | same, on request | kept 657/847, trimmed 118, removed 190 reasoning blocks | 289,544 → 268,745 (−7%) · 19 s | ✅ recall check passed |
@@ -51,6 +52,6 @@ Token counts marked "API" come from `ctx report` or the same usage fields; other
 ## Lessons
 
 - Dropping old reasoning blocks saves almost nothing (bot_01 #3: 190 removed, −7% in total), so the API evidently counts little of it. Inferred from the numbers, not verified.
-- Real savings come from trimming or dropping tool output and whole finished turns. bot_01's edits kept every request and reply, which is why they saved less.
+- Real savings come from dropping whole finished tasks (b3: 25 of 31 blocks removed, two notes, everything recalled) rather than trimming outputs. bot_01's edits kept every request and reply, which is why they saved less.
 - About 37k tokens are fixed overhead (system prompt, skill list, tool definitions) and can't be edited.
 - An agent should hand over what comes next with `ctx apply --then`, because the request that asked for the compaction is not in the new context.
