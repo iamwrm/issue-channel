@@ -34,7 +34,9 @@ A Codex hook-based provider: a Stop hook that long-polls the issue-channel serve
 
 Refs: https://learn.chatgpt.com/docs/app-server · https://learn.chatgpt.com/docs/hooks
 
-## Codex GUI live test (managed daemon)
+## Codex GUI live test (managed daemon): done
+
+**Status: done** (marked done by the user on Linear REN-107, 2026-10-11). The table below is kept as the checklist for re-testing.
 
 The Codex adapter supports the managed app-server daemon that the Codex GUI and ChatGPT Remote attach to (#31, setup in [`adapters/codex/README.md`](adapters/codex/README.md#with-the-codex-gui-managed-daemon)). It has been checked live against a real `codex app-server`, but not with the GUI itself (#22, item 3).
 
