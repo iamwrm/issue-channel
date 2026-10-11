@@ -27,6 +27,7 @@ ctx apply    # checks the edit, then switches to it when this turn ends
 8. Add a note with a `[[NOTE]]` line followed by its text, preferably between turns. Replacing everything with one note is allowed when asked for, but it loses everything else.
 9. Never invent content in a summary. When unsure, keep the exact text.
 10. **Hand over what comes next.** The turn doing the edit is never part of the file, so after the switch you won't see the request that asked for it. Pass anything still to do as `ctx apply --then "<what to do next>"` (for example the user's "after the switch, answer …"), and put results of this turn that must survive in a `[[NOTE]]` at the end.
-11. After `ctx apply`, end the turn. The switch happens then, and the next turn starts from the edited context and the `--then` text. Report the counts `apply` printed.
+11. After `ctx apply`, end the turn. The switch happens then, and the next turn starts from the edited context and the `--then` text.
+12. **Report sizes with `ctx report`, never from estimates.** After the switch, run `ctx report`: it reads the API's own usage for the old session's last request and the new session's first one, and prints a table (before, after, change, edit counts, switch time). Paste that table unchanged. `--then` already asks for it; `ctx report --from <old id>` works if the temp files are gone.
 
 `apply` refuses a file that no longer matches the conversation (run `open` again), an edited reasoning block, or an unknown block id. The current turn (the one doing the edit) is never part of the file.

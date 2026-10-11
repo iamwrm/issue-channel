@@ -55,6 +55,11 @@ started=$SECONDS
 status() { herdr agent get "$pane" 2>/dev/null | jq -r '.result.agent.agent_status // "gone"' 2>/dev/null || echo gone; }
 [[ -z $name ]] && name=$(herdr agent get "$pane" 2>/dev/null | jq -r '.result.agent.name // empty' 2>/dev/null)
 
+# One restart per pane at a time: a second one would type into the agent the first one just resumed.
+mkdir -p "$STATE_DIR"
+exec 9>"$STATE_DIR/restart-${pane//[^A-Za-z0-9]/_}.lock"
+flock -n 9 || die "another restart is already running for pane $pane"
+
 # 1. Never interrupt a turn: wait until the agent is idle.
 for ((i = 0; i < wait_idle; i += 2)); do st=$(status); [[ $st == idle || $st == done ]] && break; sleep 2; done
 [[ $st == idle || $st == done ]] || die "agent in $pane not idle after ${wait_idle}s (status $st)"
@@ -70,7 +75,7 @@ if [[ -n $plan ]]; then
     || die "session-fork fork failed: $out"
   target=$(jq -r .id <<<"$out")
   [[ $target =~ ^[0-9a-f-]{36}$ ]] || die "session-fork fork printed no id: $out"
-  log "forked $sid -> $target ($(jq -r '"\(.before) -> \(.tokens) tokens, \(.entries) entries; blocks kept \(.kept)/\(.blocks), edited \(.edited), dropped \(.dropped), notes \(.notes)\(if .handoff then ", HANDOFF ONLY" else "" end); \(.diff)"' <<<"$out"))"
+  log "forked $sid -> $target ($(jq -r '"estimate ~\(.before) -> ~\(.tokens) tokens (not API usage; see ctx report), \(.entries) entries; blocks kept \(.kept)/\(.blocks), edited \(.edited), dropped \(.dropped), notes \(.notes)\(if .handoff then ", HANDOFF ONLY" else "" end); \(.diff)"' <<<"$out"))"
   jq -r '.warnings[]? | "warning: " + .' <<<"$out" | while read -r w; do log "$w"; done
 fi
 
