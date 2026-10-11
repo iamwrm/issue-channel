@@ -176,7 +176,7 @@ test('mirror --full renders every block, hides reasoning text and attachments, e
   assert.match(live, /^\[\[LIVE_CONTEXT session=parent-session digest=[0-9a-f]{16} self=0 blocks=7 /);
   assert.match(live, /\[\[BLOCK b0001 kind=prompt /);
   assert.match(live, /\[\[BLOCK b0003 kind=tool_result for=b0002 /);
-  assert.match(live, /\[\[BLOCK b0004 kind=thinking keep-or-delete .*\]\]\n\(reasoning, kept as signed by the API: 6 bytes\)/);
+  assert.match(live, /\[\[BLOCK b0004 kind=thinking keep-or-delete .*\]\]\n\(reasoning block: keep or delete\)/);
   assert.ok(!live.includes('PRIVATE-REASONING-TEXT'));
   assert.ok(!live.includes('2026-10-10'));
   assert.match(live, /\[\[TURN 1\]\] \(\+1 attachments/);
@@ -225,7 +225,7 @@ test('refuses: edited reasoning, stale or foreign mirror, unknown blocks, bad to
   const turns = rich();
   const live = renderLive(turns, SID);
   const apply = (l, o = { source: SID }) => applyLive(turns, parseLive(l), 'c', o);
-  assert.throws(() => apply(live.replace('(reasoning, kept as signed by the API: 6 bytes)', 'new thoughts')), /can only be kept or deleted/);
+  assert.throws(() => apply(live.replace('(reasoning block: keep or delete)', 'new thoughts')), /can only be kept or deleted/);
   assert.throws(() => apply(live.replace(/digest=\w+/, 'digest=0000000000000000')), /stale/);
   assert.throws(() => apply(live, { source: 'other' }), /not other/);
   assert.throws(() => apply(live.replace('[[BLOCK b0007', '[[BLOCK b0077')), /unknown block b0077/);
@@ -258,4 +258,19 @@ test('forkLive writes the fork and an edit-diff, and excludes the running turn o
   const out = readLog(r.dest);
   assert.ok(!JSON.stringify(out).includes('ORCA-3'));
   assert.equal(out.at(-1).aiTitle, 't');
+});
+
+test('text injected inside a turn (a loaded skill) does not start a turn, so the running turn stays out', () => {
+  const entries = makeRichLog();
+  let parent = entries.findLast((e) => e.uuid).uuid;
+  const add = (e) => { const u = `s${++n}`; entries.push({ ...base(), ...e, uuid: u, parentUuid: parent }); parent = u; };
+  add({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: 'compact yourself' } });
+  add({ type: 'assistant', message: { id: 'mz', role: 'assistant', content: [{ type: 'tool_use', id: 'tz', name: 'Skill', input: {} }] } });
+  add({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tz', content: 'Launching skill' }] } });
+  add({ type: 'user', isMeta: true, sourceToolUseID: 'tz', message: { role: 'user', content: [{ type: 'text', text: 'skill body' }] } });
+  const turns = splitTurns(mainChain(entries));
+  assert.equal(turns.length, 4); // preamble + 2 rich turns + the compaction turn
+  turns.at(-1).running = true;
+  const live = renderLive(turns, SID);
+  assert.ok(!live.includes('compact yourself') && !live.includes('skill body'));
 });

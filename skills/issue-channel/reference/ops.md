@@ -24,20 +24,11 @@ Use `spawn/restart-agent.sh` (never hand-roll `/exit` + `--resume`). It waits un
 # plain restart in place: same session and context, the channel reloads with the current code
 setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" \
   --name <herdr name> --then "<what to do once back>" > /tmp/restart.json 2> /tmp/restart.log < /dev/null &
-
-# CLM-compact, then restart in place: edit your own context NOW (you still have all of it), then restart into the edit
-node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror --full "$CLAUDE_CODE_SESSION_ID" --out live.md   # every block
-#   … edit live.md with your normal edit tools (rules in its preamble and below) …
-setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" \
-  --name <herdr name> --fork live.md --then "<what to do once back>" > /tmp/restart.json 2> /tmp/restart.log < /dev/null &
 ```
 
-**Editing `live.md`** (CLM: the context is a file you edit; the edited file becomes the next session's context):
-- Each `[[BLOCK bNNNN kind=…]]` is one prompt, reply, tool call, tool output or reasoning block. Delete a block to drop it; edit its text to shorten it. Edited tool output gets a visible "trimmed" marker.
-- **Default: keep the user's requests and your replies; trim bulky tool output first;** drop whole stale exchanges (prompt and reply together). Use a `[[NOTE]]` (at a turn boundary) only to summarize what you removed. Deleting everything and writing one note is allowed, but it is a plain handoff: the next session treats its facts as hearsay.
-- `kind=thinking` is your signed reasoning: keep or delete it, never edit it (its text is not shown, and the signature is what counts). Keep it unless it's in a span you drop.
-- Attachments (reminders, tool lists) are not shown; they stay while their turn keeps any block.
-- `restart-agent.sh --fork` only takes such a file, refuses it if the session moved on after the mirror (make a new one), and writes `live.diff.md`: what was kept, edited and dropped. Report those counts with the restart.
+**Compacting your own context:** use the [live-context skill](../../live-context/SKILL.md) (`ctx open` → edit → `ctx apply`). Under the hood, `ctx apply` runs this script with `--fork <edited file>`.
+
+**Compacting another agent** (a helper or parent doing it): `node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror --full <its session id> --out live.md`, edit `live.md` (rules in the live-context skill and session-fork/README.md), then `restart-agent.sh --pane <its pane> --session <its id> --fork live.md --then "…"`. `--fork` only accepts such a file, refuses it if that session moved on after the mirror, and writes `live.diff.md`.
 
 | Rule | Why (seen live, 2026-10-10) |
 |---|---|

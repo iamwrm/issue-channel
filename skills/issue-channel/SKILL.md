@@ -1,6 +1,6 @@
 ---
 name: issue-channel
-description: Work reliably through issue-channel (issuechan) on GitHub and Linear issues. Use whenever a <channel source="issuechan"> message arrives, when replying on, listening to, consolidating, closing or cleaning up a GitHub or Linear issue for the user, when reading images attached to an issue, when the user mentions /bot, a home issue, or a Linear ref like ENG-123, or when asked to restart yourself, compact or CLM-compact your context/session (this is session-fork + spawn/restart-agent.sh, not the built-in /compact).
+description: Work reliably through issue-channel (issuechan) on GitHub and Linear issues. Use whenever a <channel source="issuechan"> message arrives, when replying on, listening to, consolidating, closing or cleaning up a GitHub or Linear issue for the user, when reading images attached to an issue, when the user mentions /bot, a home issue, or a Linear ref like ENG-123, or when asked to restart yourself.
 ---
 
 # issue-channel
@@ -56,9 +56,9 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 
 ## Restarting or compacting yourself
 
-"CLM-compact", "compact yourself" or "restart yourself" means this section, from the terminal or a `/bot`, with or without an issue. It is not Claude Code's built-in `/compact`, which only the user can type.
+To compact or tidy your context, use the **live-context** skill (`ctx open` → edit → `ctx apply`); it restarts you the same way. This section is for plain restarts and for agents that restart *another* agent.
 
-To reload the channel, or to shrink your context (CLM-compact: you edit a full mirror of your own context, block by block, before the restart) and continue in the same pane, use `spawn/restart-agent.sh`, detached, with `--then`. Rules and commands: [reference/ops.md](reference/ops.md#restart-or-compact-yourself).
+To reload the channel and continue in the same pane, use `spawn/restart-agent.sh`, detached, with `--then`. Rules and commands: [reference/ops.md](reference/ops.md#restart-or-compact-yourself).
 
 ## Operating the channel
 
