@@ -29,7 +29,8 @@ export function readLog(path) {
 
 const isToolResult = (e) =>
   e.type === 'user' && Array.isArray(e.message?.content) && e.message.content.some((c) => c.type === 'tool_result');
-const isTurnStart = (e) => e.type === 'user' && !isToolResult(e) && !e.isSidechain;
+// Text Claude Code injects inside a turn (a loaded skill's body: isMeta + sourceToolUseID) is not a new prompt.
+const isTurnStart = (e) => e.type === 'user' && !isToolResult(e) && !e.isSidechain && !e.isMeta && !e.sourceToolUseID;
 
 // Main chain: walk parentUuid back from the last chain entry.
 export function mainChain(entries) {
@@ -162,7 +163,7 @@ export function applyPlan(turns, plan, sessionId) {
 // The agent edits that file in its OLD session (it still has the whole context and its reasoning),
 // then `fork` applies the edited file. Rules, from POC runs against Claude Code 2.1.284 / Opus 5.5:
 // - thinking is opaque: its signature is the real content (a rewritten text is accepted and ignored),
-//   so it can be kept or deleted, never edited. Its text is never rendered.
+//   so it can be kept or deleted, never edited. Its text is never rendered (a placeholder is shown).
 // - an orphaned tool_result is dropped by Claude Code anyway; here it is dropped explicitly and
 //   reported. Deleting a tool_use takes its result with it; deleting only a result leaves a stub.
 // - an edited tool output gets a visible trim marker, so the model doesn't take it for a contradiction.
@@ -189,8 +190,8 @@ function blocksOf(entry, turnStart) {
   return m.content.map((c, k) => {
     if (c.type === 'text') return { kind: turnStart ? 'prompt' : entry.type === 'assistant' ? 'text' : 'user', k, text: c.text };
     // Never render reasoning text: the mirror is read back by the model, and raw reasoning stays private.
-    if (c.type === 'thinking') return { kind: 'thinking', k, opaque: true, text: `(reasoning, kept as signed by the API: ${c.signature?.length ?? 0} bytes)` };
-    if (c.type === 'redacted_thinking') return { kind: 'thinking', k, opaque: true, text: `(redacted reasoning, ${c.data?.length ?? 0} bytes)` };
+    if (c.type === 'thinking') return { kind: 'thinking', k, opaque: true, text: '(reasoning block: keep or delete)' };
+    if (c.type === 'redacted_thinking') return { kind: 'thinking', k, opaque: true, text: '(reasoning block: keep or delete)' };
     if (c.type === 'tool_use') return { kind: 'tool_use', k, id: c.id, name: c.name, text: `${c.name} ${JSON.stringify(c.input)}` };
     if (c.type === 'tool_result') return { kind: 'tool_result', k, for: c.tool_use_id, text: partText(c.content) };
     return { kind: c.type, k, opaque: true, text: clip(JSON.stringify(c), 300) };
@@ -213,12 +214,12 @@ export function liveBlocks(turns) {
 }
 
 const HOWTO = `How to edit (this preamble is ignored):
-- Delete a whole [[BLOCK …]] (header and text) to drop it; edit its text to shorten or rewrite it.
-- kind=thinking (and other keep-or-delete blocks) can only be kept or deleted; their signature, not the text, is what the model sees.
-- Attachments (reminders, tool lists) are not shown; they stay while their turn keeps any block.
-- kind=tool_use: keep "<name> <json input>"; deleting it also drops its tool_result.
+- Each [[BLOCK …]] is one message part: a request, a reply, a tool call, a tool output or a reasoning block.
+- Delete a whole block (header and text) to remove it; edit its text to shorten or rewrite it.
+- Reasoning blocks (kind=thinking) can only be kept or deleted.
+- kind=tool_use: keep "<name> <json input>"; deleting it also removes its output.
 - Add a note anywhere with a line [[NOTE]] followed by its text; prefer turn boundaries.
-- Deleting everything and leaving one [[NOTE]] is a plain handoff; it is allowed, and reported as such.
+- Removing everything and leaving one [[NOTE]] is allowed (a plain summary), and reported as such.
 - Lines starting with [[ inside a text are escaped with a leading backslash.
 `;
 

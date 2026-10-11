@@ -178,6 +178,8 @@ mkdir -p ~/.claude/skills && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.cl
 mkdir -p ~/.codex/skills  && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.codex/skills/issue-channel    # Codex
 ```
 
+[`skills/live-context/`](skills/live-context/SKILL.md) lets an agent compact its own context the way pi-clm does: `ctx open` writes the working context to a file (one block per request, reply, tool call, tool output; reasoning only as a keep-or-delete placeholder), the agent edits it with pi-clm's rules (surgical, keep conversational units, never print the whole file), and `ctx apply` checks the edit and switches to it when the turn ends. Under the hood that is `session-fork` + `spawn/restart-agent.sh --fork` (Claude Code in herdr only). The skill is worded neutrally on purpose: the agent works on "its working context" through the tool and never reads raw session logs itself; an earlier design that had it mirror its own Claude Code log was stopped by the model's safeguards three times. Install for Claude Code: `ln -sfn "$ISSUECHAN_DIR/skills/live-context" ~/.claude/skills/live-context`.
+
 ### `/bot` rules
 
 - A **newly created** comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order. Edits never trigger, including edits of a `/bot` comment. They wait in the buffer for the next `/bot`.
