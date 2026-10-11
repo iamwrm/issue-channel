@@ -182,6 +182,20 @@ mkdir -p ~/.codex/skills  && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.co
 
 [`skills/live-context/`](skills/live-context/SKILL.md) lets an agent compact its own context the way pi-clm does: `ctx open` writes the working context to a file (one block per request, reply, tool call, tool output; reasoning only as a keep-or-delete placeholder), the agent edits it with pi-clm's rules (surgical, keep conversational units, never print the whole file), and `ctx apply` checks the edit and switches to it when the turn ends. Under the hood that is `session-fork` + `spawn/restart-agent.sh --fork` (Claude Code in herdr only). The skill is worded neutrally on purpose: the agent works on "its working context" through the tool and never reads raw session logs itself; an earlier design that had it mirror its own Claude Code log was stopped by the model's safeguards three times. Install for Claude Code: `ln -sfn "$ISSUECHAN_DIR/skills/live-context" ~/.claude/skills/live-context`.
 
+### Agent lifecycle
+
+How to start, restart and compact agents (Claude Code in herdr; Codex and pi are in [BACKLOG.md](BACKLOG.md#b4-restart-and-live-context-for-codex-and-pi)). Why it works this way: [docs/DECISIONS.md](docs/DECISIONS.md). Measured results: [session-fork/RESULTS.md](session-fork/RESULTS.md).
+
+| Task | How |
+|---|---|
+| Spawn a new agent on an issue | `spawn/spawn-agent.sh` ([spawn/README.md](spawn/README.md)): new herdr tab, subscribes under its own session name |
+| Restart an agent in place | `spawn/restart-agent.sh --pane <p> --session <id> [--then "<next>"]`: same session, the channel reloads with the current code |
+| An agent compacts **itself** | [`live-context`](skills/live-context/SKILL.md): `ctx open` → edit the file with one script → `ctx apply [--then "<next>"]` → the switch happens when the turn ends → `ctx report` for the API-measured before/after |
+| Compact **another** agent | `session-fork.mjs mirror --full <its id> --out live.md` → edit → `spawn/restart-agent.sh --pane <p> --session <id> --fork live.md` ([session-fork/README.md](session-fork/README.md)) |
+| Hand a task to a worker with a trimmed context | the "Dispatch" prompt in [PROMPTS.md](PROMPTS.md) |
+
+After any restart, check `issue_subscriptions`: a session that was started fresh and then switched with `/resume` keeps the fresh id and loses its subscriptions ([BACKLOG.md](BACKLOG.md#b1-subscriptions-lost-after-resume-inside-the-tui)).
+
 ### `/bot` rules
 
 - A **newly created** comment whose text starts with `/bot` triggers a delivery: the buffered new/edited comments (and issue-body edits) since the last delivery, in order. Edits never trigger, including edits of a `/bot` comment. They wait in the buffer for the next `/bot`.

@@ -97,3 +97,18 @@ Neither mechanism interrupts a running tool or a streaming reply. A message land
 - Implemented in `463aee9` and deployed at `https://issue-channel.example.com` (server + `cloudflared` containers), with the webhook registered on the owner's orchestrator repo. Validated end to end there (issue #11): idle wake, mid-turn steer, comment edits and the bot-marker self-filter.
 - Reactions, `issue_reply`, auto-resubscribe and edit diffs: `569de33` (developed live on #12).
 - Prior art: `stop_hook_poller/`, a session-scoped Stop-hook wait for Codex, was removed in `d50a97c` (#13). Codex support is now planned as an app-server bridge (see BACKLOG.md).
+
+## Self-compaction and model safeguards
+
+Decided 2026-10-10 ([D8](docs/DECISIONS.md#d8-self-compaction-goes-through-the-neutral-live-context-skill)); results in [session-fork/RESULTS.md](session-fork/RESULTS.md#self-compaction-by-route).
+
+**What happened.** The first self-compaction design told the agent to run `session-fork mirror --full $CLAUDE_CODE_SESSION_ID`, read the resulting file and edit it. On Opus 5.5 the model's safeguard stopped that 3 times out of 3 with `[reasoning_extraction]`, also with a realistic task. In the interactive runs the stop came while the model was still writing the shell command, before any mirror existed, so the file's content (which never contains reasoning text) was not the trigger.
+
+**Likely cause (inferred; the classifier's rules are not public).** Mid-session, the agent sets out to dump and read back its own Claude Code session log, which in an interactive session contains its raw reasoning. That pattern looks like extracting its own reasoning.
+
+**What pi-clm does differently.** In pi-clm the harness itself declares, from the first turn, that "the file named in Editable context is the exact conversation you will see"; the extension owns and refreshes that file; and the rules say never to print it whole. In the setup we compared, pi-clm also ran on a non-Anthropic model, so the safeguard never saw it.
+
+**What we built.** The [`live-context`](skills/live-context/SKILL.md) skill adopts pi-clm's framing and rules. The agent asks a tool (`ctx open`) for "its working context as a file", tidies it with one script without printing it, and calls `ctx apply`. It never names or reads a session log; reasoning appears only as a keep-or-delete placeholder. Under the hood `ctx` uses `session-fork` and `restart-agent.sh`. It has run 8 times (5 test agents, 3 times on a long-running agent) with no safeguard stop.
+
+**Limits.** This is evidence, not a guarantee: the safeguard's behaviour can change. Don't retry or reword around a stop; report it.
+
