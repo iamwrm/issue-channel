@@ -94,3 +94,33 @@ test('linear.mjs edit-comment replaces the body and keeps the marker', async () 
   assert.equal((await cli('edit-comment', 'c5', '--body', 'new text')).stdout.trim(), 'updated u2')
   assert.deepEqual(calls[0].variables, { id: 'c5', i: { body: 'new text\n\n[//]: # (issue-channel:bot)\n' } })
 })
+
+test('linear.mjs help aliases and command help print usage without credentials or API calls', async () => {
+  calls.length = 0
+  for (const args of [[], ['--help'], ['-h'], ['help'], ['create', '--help'], ['comment', '-h']]) {
+    const r = await new Promise(resolve => execFile(process.execPath,
+      [fileURLToPath(new URL('./linear.mjs', import.meta.url)), ...args], {
+        env: { PATH: process.env.PATH, LINEAR_API_URL: `http://127.0.0.1:${api.address().port}/graphql`,
+          ISSUECHAN_LINEAR_ENV_FILE: path.join(dir, 'missing.env') },
+      }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stdout, stderr })))
+    assert.equal(r.code, 0, r.stderr)
+    assert.equal(r.stderr, '')
+    assert.match(r.stdout, /Usage: linear\.mjs/)
+    for (const command of ['whoami', 'issue', 'comment', 'edit-comment', 'delete-comment', 'set-description', 'set-state', 'create']) {
+      assert.ok(r.stdout.includes(`  ${command}`), command)
+    }
+    assert.match(r.stdout, /ISSUECHAN_LINEAR_ENV_FILE/)
+  }
+  assert.deepEqual(calls, [])
+})
+
+test('linear.mjs unknown commands suggest help and help-like body text remains a value', async () => {
+  calls.length = 0
+  const r = await cli('unknown-command')
+  assert.equal(r.code, 2)
+  assert.match(r.stderr, /unknown command "unknown-command"; run linear\.mjs --help/)
+  assert.deepEqual(calls, [])
+  assert.equal((await cli('comment', 'REN-9', '--body', '--help')).code, 0)
+  assert.equal(calls.find(c => c.query.includes('commentCreate')).variables.input.body,
+    '--help\n\n[//]: # (issue-channel:bot)\n')
+})
