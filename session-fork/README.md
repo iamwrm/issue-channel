@@ -7,7 +7,7 @@ Fork a Claude Code session log into an **edited copy** and start a new session f
 
 The idea comes from [Context Language Models](https://github.com/facebookresearch/context-language-models) and [lolipopshock/pi-clm](https://github.com/lolipopshock/pi-clm): the context is a file that the model edits, and the edited version becomes its next input. pi-clm does this live inside Pi on every request. Claude Code has no extension point for that, so here the edit happens **between sessions**: the agent edits a copy of its own session log, and a new session resumes the copy.
 
-The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Replace myself with an edited-context successor" and "Dispatch to another issue". Active work is tracked in [#14](https://github.com/owner/repo/issues/14).
+The prompts that use this tool are in [`../PROMPTS.md`](../PROMPTS.md): "Compact yourself" and "Dispatch to another issue". Active work is tracked in [#14](https://github.com/owner/repo/issues/14).
 
 ## How it works
 
@@ -203,6 +203,9 @@ Copied assistant replies lose their `requestId` and get `usage` with every numbe
 The cost is that Claude Code reads the last reply's `usage` as a context-size hint until the fork's first request. For a fork, that number described the parent's larger context anyway.
 
 ## Status
+
+Measured results of every live test: [RESULTS.md](RESULTS.md). Decisions: [docs/DECISIONS.md](../docs/DECISIONS.md).
+
 
 - [x] `mirror` / `fork` / `handoff` with unit tests (`node --test`)
 - [x] Edited fork resumes in a herdr pane and remembers exactly the edited history

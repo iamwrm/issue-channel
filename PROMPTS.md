@@ -20,12 +20,20 @@ Subscribe with issuechan to the GitHub issue mentioned above, confirm it is list
 While working on the task above, post one status comment on the subscribed issue with a headline and a Step/Status/Notes table, keep editing that same comment in place with gh as each step progresses (starting with the same `🤖 <tag> ·` prefix as issue_reply and always keeping the bot marker as the last line), and post a final summary with issue_reply when everything is done.
 ```
 
-## Consolidate the conversation
+## Propose issue to repo
 
-Version: `v20261009.1`
+Version: `v20261011.1`
 
 ```text
-Consolidate the whole subscribed issue, its description and every comment, by calling the GitHub API with gh: first save the current issue and all its comments to a local JSON backup, then rewrite the description as the current state (goal, source-of-truth links, decisions, open checklist), post the rest (results and history that don't belong in the description) as few self-contained comments as you judge best, in the open rather than collapsed, starting with the same `🤖 <tag> ·` prefix as issue_reply and ending with the bot marker line, without repeating anything between description and comments, keeping every decision, result, link and still-open request, then delete all the older comments they replace, both mine and yours, including this request, and mark it done with issue_done.
+Propose moving the durable content of the subscribed issue into <owner/repo>, which is the source of truth (the issue is only a working surface we can wipe at any time): back up the issue first, then reply with a table mapping each part of the description and comments to a repo file (decisions to docs/DECISIONS.md as numbered dated entries, measured results next to the code they test, open items to BACKLOG.md with stable ids, how-tos to the READMEs, design rationale to DESIGN.md; history is dropped in favour of git log and the backup), what the issue keeps afterwards (links, the request being worked on, the backlog ids it covers), and any questions. Don't change the repo or the issue until I say go; then do it as one PR and shrink the issue only after the PR is merged.
+```
+
+## Consolidate the conversation
+
+Version: `v20261011.1`
+
+```text
+Consolidate the whole subscribed issue using the issue-channel skill (reference/consolidate.md): back up the issue and all its comments, move anything durable (decisions, results, open items, how-tos) into the repo as one PR, and once it is merged rewrite the description as links plus the active work, post at most one short comment saying what moved where (PR link, backup path), delete all the older comments including this request, and mark it done with issue_done.
 ```
 
 ## Launch a new agent on a new issue
@@ -34,11 +42,13 @@ Consolidate the whole subscribed issue, its description and every comment, by ca
 Create a new issue in <owner/repo> for the topic above, start a fresh agent listening to it with `$ISSUECHAN_DIR/spawn/spawn-agent.sh` under a short session name you pick, and give me the issue link and the tab id.
 ```
 
-## Replace myself with an edited-context successor
+## Compact yourself (replace yourself with an edited-context successor)
 
 ```text
-Replace yourself on the subscribed issue with a successor that has a cleaner context: run `node $ISSUECHAN_DIR/session-fork/session-fork.mjs mirror --full $CLAUDE_CODE_SESSION_ID --out live.md`, edit live.md (keep what the successor needs, trim or drop the rest block by block, end with a `[[NOTE]]` handoff), fork it with `fork $CLAUDE_CODE_SESSION_ID live.md`, copy your issuechan state to the fork with the tool's `handoff` command, unsubscribe from the issue, start the fork with `$ISSUECHAN_DIR/spawn/spawn-agent.sh --resume <fork id>`, and tell me on the issue once it is listening.
+Compact your context with the live-context skill: `ctx open`, tidy the file with one script (keep what the work needs, trim or drop the rest block by block, put this turn's results in a `[[NOTE]]` at the end), then `ctx apply --then "<what to do next>"` and end the turn. After the switch, post the `ctx report` table on the subscribed issue.
 ```
+
+To give another agent a cleaner context, use `session-fork mirror --full <its id>` and `spawn/restart-agent.sh --fork` instead ([README](README.md#agent-lifecycle)); never mirror your own session ([D8](docs/DECISIONS.md#d8-self-compaction-goes-through-the-neutral-live-context-skill)).
 
 ## Dispatch to another issue
 

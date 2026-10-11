@@ -49,7 +49,7 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 
 - Back up before rewriting or deleting: `node scripts/backup-issue.mjs <ref>` saves the issue and all comments to `~/.local/state/issue-channel/backups/`. Back up **again** right before deleting if comments arrived since the last backup.
 - Delete only what the user asked for, after the replacement content is posted.
-- Consolidating an issue (the user's "consolidate" request): follow [reference/consolidate.md](reference/consolidate.md).
+- The repo is the source of truth; issues hold links and active work. Consolidating an issue (the user's "consolidate" request) means moving durable content into the repo first: follow [reference/consolidate.md](reference/consolidate.md).
 - Linear deletions: replies before their parent; deleting a parent also deletes its whole thread, including the user's replies in it. Deleting another user's comment needs `admin`, which an app-actor token never has. Details in [reference/linear.md](reference/linear.md).
 
 ## Linear quick facts

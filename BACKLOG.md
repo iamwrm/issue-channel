@@ -1,6 +1,45 @@
 # issue-channel backlog
 
-## Codex support via app-server bridge (turn/start + turn/steer)
+Open work, with stable ids that issues link to ([D14](docs/DECISIONS.md#d14-the-repo-is-the-source-of-truth-issues-are-disposable-working-surfaces)). Mark an item **done** with a date instead of deleting it right away.
+
+| Id | Item | Status |
+|---|---|---|
+| B1 | [Subscriptions lost after `/resume` inside the TUI](#b1-subscriptions-lost-after-resume-inside-the-tui) | Open |
+| B2 | [`ctx report` right after the switch](#b2-ctx-report-right-after-the-switch) | Small |
+| B3 | [Stronger self-compaction](#b3-stronger-self-compaction) | Idea |
+| B4 | [Restart and live-context for Codex and pi](#b4-restart-and-live-context-for-codex-and-pi) | Planned |
+| B5 | [Agent spawning beyond restart and compaction](#b5-agent-spawning-beyond-restart-and-compaction) | Not specified |
+| B6 | [Rebuild the server image from `main`](#b6-rebuild-the-server-image-from-main) | Optional |
+| B7 | [Codex support via app-server bridge](#b7-codex-support-via-app-server-bridge-turnstart--turnsteer) | Design |
+| B8 | [Codex GUI live test](#b8-codex-gui-live-test-managed-daemon-done) | Done 2026-10-11 |
+| B9 | [Hardening](#b9-hardening) | Open |
+
+## B1. Subscriptions lost after `/resume` inside the TUI
+
+A Claude Code session started fresh and then switched with `/resume` to an older conversation keeps the fresh session id in its issuechan channel, so the channel loads the fresh (empty) subscription state while the conversation continues under the old id. Seen three times on 2026-10-10/11 (bot_01 after a reboot, bot_02, bot_01 again). `restart-agent.sh` is not affected (it starts the process with `--resume <id>`). Details: [iamwrm/mainbot#43](https://github.com/iamwrm/mainbot/issues/43) and [`adapters/claude-code/README.md`](adapters/claude-code/README.md). Until it's fixed: after any restart, run `issue_subscriptions` and resubscribe from the old `cc-<id>.json`.
+
+## B2. `ctx report` right after the switch
+
+The new session's first request is only written to its log when it finishes, so `ctx report` run as the very first command after the switch says "not measured yet"; a second run a moment later works. Change the message to "run it again in a moment", and have the `--then` text ask for the report after one tool call.
+
+## B3. Stronger self-compaction
+
+The compactions so far kept every request and reply and only trimmed tool output (−45%, then −7%; dropping 190 reasoning blocks saved almost nothing). Larger savings need finished exploratory turns dropped whole, with one `[[NOTE]]` per finished task (results, PRs, commits). Add that as guidance to the live-context skill, with a realistic test.
+
+## B4. Restart and live-context for Codex and pi
+
+`spawn/restart-agent.sh` (restart in place, optionally into a CLM-compacted fork) and the `live-context` skill (`ctx`) support Claude Code only. Add **Codex** and **pi**: per harness, how to exit and resume a session in a pane, where its session log lives (for compaction a session-fork equivalent is needed), its startup dialogs, and how to find its issuechan process. Requested on Linear REN-108.
+
+## B5. Agent spawning beyond restart and compaction
+
+Open topic from Linear REN-108; not specified yet.
+
+## B6. Rebuild the server image from `main`
+
+Not needed for any change so far; optional so the running image matches `main`.
+
+
+## B7. Codex support via app-server bridge (turn/start + turn/steer)
 
 Follow-up to [`DESIGN.md`](DESIGN.md). Add Codex support to issue-channel through a **Codex app-server bridge**. Claude Code support uses a channel ([`DESIGN.md`](DESIGN.md)). Codex has no channel equivalent, and its background hooks can't wake an idle session ("Finishing a background hook doesn't start a new turn").
 
@@ -34,7 +73,7 @@ A Codex hook-based provider: a Stop hook that long-polls the issue-channel serve
 
 Refs: https://learn.chatgpt.com/docs/app-server · https://learn.chatgpt.com/docs/hooks
 
-## Codex GUI live test (managed daemon): done
+## B8. Codex GUI live test (managed daemon): done
 
 **Status: done** (marked done by the user on Linear REN-107, 2026-10-11). The table below is kept as the checklist for re-testing.
 
@@ -51,12 +90,8 @@ The Codex adapter supports the managed app-server daemon that the Codex GUI and 
 | 7 | Optional: `codex app-server daemon restart`, reopen the thread, post a `/bot` | Delivered without asking the agent to subscribe again |
 
 
-## Hardening
+## B9. Hardening
 
 - Pin the `cloudflare/cloudflared` image version in `deploy/issue-channel.sh` instead of `:latest`.
 - The `regex` filter runs patterns sent by API-key holders. Add a length cap or a timeout to avoid catastrophic backtracking.
 - Live-test `/bot <name>` targeting between two concurrent sessions.
-
-## restart-agent.sh for other harnesses
-
-`spawn/restart-agent.sh` (restart in place, optionally into a CLM-compacted fork) supports Claude Code only. Add **Codex** and **pi**: per harness, how to exit and resume a session in a pane, where its session log lives (for compaction a session-fork equivalent is needed), its startup dialogs, and how to find its issuechan process. Requested on Linear REN-108.
