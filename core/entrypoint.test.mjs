@@ -28,8 +28,12 @@ test('Linear and session-fork CLI entrypoints execute from a checkout containing
       fs.mkdirSync(path.dirname(out), { recursive: true })
       fs.copyFileSync(fileURLToPath(new URL('../' + name, import.meta.url)), out)
     }
-    for (const [name, message] of [['skills/issue-channel/scripts/linear.mjs', /unknown command/], ['session-fork/session-fork.mjs', /usage: session-fork/]]) {
-      assert.throws(() => execFileSync(process.execPath, [path.join(dir, name)], { stdio: 'pipe' }), error => {
+    for (const args of [[], ['--help'], ['-h']]) {
+      const output = execFileSync(process.execPath, [path.join(dir, 'skills/issue-channel/scripts/linear.mjs'), ...args], { encoding: 'utf8' })
+      assert.match(output, /Usage: linear\.mjs/)
+    }
+    for (const [name, args, message] of [['skills/issue-channel/scripts/linear.mjs', ['unknown-command'], /unknown command/], ['session-fork/session-fork.mjs', [], /usage: session-fork/]]) {
+      assert.throws(() => execFileSync(process.execPath, [path.join(dir, name), ...args], { stdio: 'pipe' }), error => {
         assert.match(error.stderr.toString(), message)
         assert.notEqual(error.status, 0)
         return true
