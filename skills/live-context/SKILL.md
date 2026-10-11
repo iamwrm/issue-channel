@@ -26,6 +26,7 @@ ctx apply    # checks the edit, then switches to it when this turn ends
 7. Reasoning blocks (`kind=thinking`) are placeholders: keep or delete them, never edit them. Keep them unless the span around them goes.
 8. Add a note with a `[[NOTE]]` line followed by its text, preferably between turns. Replacing everything with one note is allowed when asked for, but it loses everything else.
 9. Never invent content in a summary. When unsure, keep the exact text.
-10. After `ctx apply`, end the turn. The switch happens then, and the next turn starts from the edited context. Report the counts `apply` printed.
+10. **Hand over what comes next.** The turn doing the edit is never part of the file, so after the switch you won't see the request that asked for it. Pass anything still to do as `ctx apply --then "<what to do next>"` (for example the user's "after the switch, answer …"), and put results of this turn that must survive in a `[[NOTE]]` at the end.
+11. After `ctx apply`, end the turn. The switch happens then, and the next turn starts from the edited context and the `--then` text. Report the counts `apply` printed.
 
 `apply` refuses a file that no longer matches the conversation (run `open` again), an edited reasoning block, or an unknown block id. The current turn (the one doing the edit) is never part of the file.

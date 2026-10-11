@@ -60,7 +60,7 @@ for ((i = 0; i < wait_idle; i += 2)); do st=$(status); [[ $st == idle || $st == 
 [[ $st == idle || $st == done ]] || die "agent in $pane not idle after ${wait_idle}s (status $st)"
 log "agent idle"
 
-# 2. Compact: fork the session log by the plan, and hand the issuechan state to the fork.
+# 2. Compact: fork the session log by the edited file (a bad edit fails here, before anything is stopped).
 target=$sid
 if [[ -n $plan ]]; then
   # A mirror the agent made of itself (self=1) left out its running turn, the one doing the edit: claim the
@@ -72,21 +72,29 @@ if [[ -n $plan ]]; then
   [[ $target =~ ^[0-9a-f-]{36}$ ]] || die "session-fork fork printed no id: $out"
   log "forked $sid -> $target ($(jq -r '"\(.before) -> \(.tokens) tokens, \(.entries) entries; blocks kept \(.kept)/\(.blocks), edited \(.edited), dropped \(.dropped), notes \(.notes)\(if .handoff then ", HANDOFF ONLY" else "" end); \(.diff)"' <<<"$out"))"
   jq -r '.warnings[]? | "warning: " + .' <<<"$out" | while read -r w; do log "$w"; done
-  if [[ -f $STATE_DIR/cc-$sid.json ]]; then
-    node "$ROOT/session-fork/session-fork.mjs" handoff "$sid" "$target" >/dev/null || die "handoff failed"
-    mv "$STATE_DIR/cc-$sid.json" "$STATE_DIR/cc-$sid.json.handed-off"
-    log "issuechan state handed to $target"
-  fi
 fi
 
-# 3. Exit the running session and wait until its process is gone.
-herdr pane send-text "$pane" "/exit" >/dev/null; sleep 1; herdr pane send-keys "$pane" enter >/dev/null
-for i in $(seq 1 60); do [[ $(status) == gone ]] && break; sleep 1; done
-[[ $(status) == gone ]] || die "agent in $pane did not exit"
+# 3. Exit the running session and wait until its process is gone. A dialog or overlay left open after the turn
+#    (seen live: a feedback prompt) swallows typed text, so close it with Escape first and retry a few times.
+for attempt in 1 2 3; do
+  herdr pane send-keys "$pane" escape >/dev/null; sleep 1
+  herdr pane send-text "$pane" "/exit" >/dev/null; sleep 1; herdr pane send-keys "$pane" enter >/dev/null
+  for i in $(seq 1 20); do [[ $(status) == gone ]] && break 2; sleep 1; done
+  log "exit attempt $attempt: still running; screen:"$'\n'"$(herdr pane read "$pane" --source visible --lines 15 2>/dev/null | grep -v '^\s*$' | tail -8)"
+done
+# Nothing was handed over yet, so the running session keeps its subscriptions when this fails.
+[[ $(status) == gone ]] || die "agent in $pane did not exit; its session and issuechan state are untouched${plan:+ (fork $target is unused)}"
 log "exited"
 sleep 2
 
-# 4. Resume in the same pane, answering only the known startup dialogs.
+# 4. Hand the issuechan state to the fork, now that the parent can no longer change it.
+if [[ -n $plan && -f $STATE_DIR/cc-$sid.json ]]; then
+  node "$ROOT/session-fork/session-fork.mjs" handoff "$sid" "$target" >/dev/null || die "handoff failed"
+  mv "$STATE_DIR/cc-$sid.json" "$STATE_DIR/cc-$sid.json.handed-off"
+  log "issuechan state handed to $target"
+fi
+
+# 5. Resume in the same pane, answering only the known startup dialogs.
 herdr pane run "$pane" "$launcher --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan --resume $target" >/dev/null
 ready=''
 for i in $(seq 1 45); do
@@ -103,7 +111,7 @@ done
 for i in $(seq 1 20); do [[ $(status) != gone ]] && break; sleep 1; done
 [[ -n $name ]] && herdr agent rename "$pane" "$name" >/dev/null 2>&1
 
-# 5. Verify: exactly one issuechan channel process for the resumed session.
+# 6. Verify: exactly one issuechan channel process for the resumed session.
 pid=''
 for i in $(seq 1 20); do
   for p in $(pgrep -f 'adapters/claude-code/channel.mjs'); do
@@ -115,7 +123,7 @@ done
 [[ -n $pid ]] || log "warning: no issuechan channel process found for $target"
 log "resumed $target (channel pid ${pid:-?})"
 
-# 6. Tell the agent what happened and what to do next.
+# 7. Tell the agent what happened and what to do next.
 [[ -n $then ]] && herdr agent prompt "$pane" "$then" >/dev/null
 
 jq -nc --arg pane "$pane" --arg from "$sid" --arg session "$target" --argjson forked "$([[ -n $plan ]] && echo true || echo false)" --argjson edit "$([[ -n $plan ]] && jq -c '{kept, blocks, edited, dropped, notes, handoff, diff}' <<<"$out" || echo null)" \

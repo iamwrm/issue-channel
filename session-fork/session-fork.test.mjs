@@ -274,3 +274,34 @@ test('text injected inside a turn (a loaded skill) does not start a turn, so the
   const live = renderLive(turns, SID);
   assert.ok(!live.includes('compact yourself') && !live.includes('skill body'));
 });
+
+test('channel deliveries (isMeta with origin.kind "channel") still start turns', () => {
+  const entries = makeRichLog();
+  let parent = entries.findLast((e) => e.uuid).uuid;
+  const add = (e) => { const u = `c${++n}`; entries.push({ ...base(), ...e, uuid: u, parentUuid: parent }); parent = u; };
+  add({ type: 'user', isMeta: true, origin: { kind: 'channel' }, message: { role: 'user', content: '<channel source="issuechan">/bot hi</channel>' } });
+  add({ type: 'assistant', message: { id: 'mc', role: 'assistant', content: [{ type: 'text', text: 'hello from the channel turn' }] } });
+  add({ type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: '[Image: attached]' }] } });
+  const turns = splitTurns(mainChain(entries));
+  assert.equal(turns.length, 4);
+  assert.match(renderLive(turns, SID), /\[\[TURN 3\]\][\s\S]*kind=prompt[\s\S]*hello from the channel turn/);
+});
+
+test('parallel tool calls: sibling results off the parent chain are put back, so the turn is complete', () => {
+  const entries = makeRichLog();
+  let parent = entries.findLast((e) => e.uuid).uuid;
+  const add = (e, p = parent) => { const u = `p${++n}`; entries.push({ ...base(), ...e, uuid: u, parentUuid: p }); parent = u; return u; };
+  add({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: 'subscribe to three issues' } });
+  const u1 = add({ type: 'assistant', message: { id: 'mp', role: 'assistant', content: [{ type: 'tool_use', id: 'a1', name: 'sub', input: { n: 1 } }] } });
+  const u2 = add({ type: 'assistant', message: { id: 'mp', role: 'assistant', content: [{ type: 'tool_use', id: 'a2', name: 'sub', input: { n: 2 } }] } });
+  const u3 = add({ type: 'assistant', message: { id: 'mp', role: 'assistant', content: [{ type: 'tool_use', id: 'a3', name: 'sub', input: { n: 3 } }] } });
+  add({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a1', content: 'r1' }] } }, u1);
+  add({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a2', content: 'r2' }] } }, u2);
+  add({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a3', content: 'r3' }] } }, u3);
+  add({ type: 'assistant', message: { id: 'mq', role: 'assistant', content: [{ type: 'text', text: 'all three subscribed' }] } });
+  const chain = mainChain(entries);
+  const tail = chain.slice(-8).map((e) => e.message.content[0]?.tool_use_id ?? e.message.content[0]?.id ?? e.message.content[0]?.text ?? e.message.content);
+  assert.deepEqual(tail, ['subscribe to three issues', 'a1', 'a2', 'a3', 'a1', 'a2', 'a3', 'all three subscribed']);
+  const turns = splitTurns(chain);
+  assert.match(renderLive(turns, SID), /\[\[TURN 3\]\][\s\S]*r1[\s\S]*r2[\s\S]*r3[\s\S]*all three subscribed/);
+});
