@@ -70,3 +70,25 @@ A test agent spawned with `spawn-agent.sh` got a codeword + number in one turn, 
 | T2 | Compact (drop the secret turn, replace the summary) + restart, run from another session | ⚠️ 8 s, fork took over the pane with the subscription, `/bot` answered, codeword kept, 58.5k → 50.8k tokens, **but the secret leaked**: the turn that ran `mirror`/wrote the plan quotes the dropped turn and was kept |
 | T2b | Same after the fix (the plan-writing turn is always dropped) | ✅ secret absent from the fork's log and unknown to the agent (it said so instead of guessing), codeword kept, 59.2k → 45.9k tokens |
 | T3 | The agent compacts **itself**: mirror, plan, `restart-agent.sh` detached, turn ends | ✅ waited for its turn to end, 14 s, 58.6k → 41.8k tokens; the fork followed `--then` and posted as `cc:<fork id>` with the codeword. The agent first asked for confirmation because the instructions came as pasted text |
+
+# no-compact
+
+Reset a Claude Code agent's context **without a summary**, the counterpart of Pi's `/no-compact` (piagent-config `packages/pi-history-notes`). It's for a big session that sat idle past the prompt-cache TTL (1h): resuming it would re-write its whole context to the cache on the next request. After a no-compact, the next request starts from the system prompt, the tools and a short note, and the agent reads back from the old log only what it needs.
+
+```text
+/bot !no-compact               every session listening on the issue (usually one)
+/bot !no-compact <name>        only that session; an unknown name resets nothing
+<further lines>                typed into the new session as its first prompt (an open /bot request it answers)
+```
+
+**Matched by code, never by the model.** Anything the model reads is already a request over the stale context, which is the cost being avoided. So `parseTrigger` (`core/lib.mjs`) recognises exactly that first line, and the channel (`core/engine.mjs` `noCompact`) doesn't deliver it. Instead it:
+
+1. saves the cursor past the command (plus the open request, when there is text), because the swap hands this state file over;
+2. calls the adapter's `noCompact`, which starts [`no-compact.mjs`](no-compact.mjs) detached. A missing herdr pane fails here: the channel posts why and delivers the text as a normal `/bot`;
+3. holds back every later `/bot` (unflushed, so the successor gets them). If the swap fails before the old session exits, the channel listens again and delivers what it held.
+
+`no-compact.mjs` runs `restart-agent.sh --no-compact` and then posts the outcome on the issue (`no-compact: reset cc:<old> → cc:<new>`), with no model involved. `restart-agent.sh` waits until the agent is idle, then runs `session-fork reset <old>`, `/exit`, `handoff`, and resumes the fork in the same pane, typing in the text.
+
+`session-fork reset` writes a fork that keeps **no turn**: one note with the old log's path, how to read it back (`session-fork mirror <old>`, bounded reads, verify live state, follow chained resets), and the **last exchange verbatim** (request and final reply, capped at 16k chars, about 4k tokens) so "continue" needs no reads. The old log is untouched: `--resume <old id>` is the rollback.
+
+There is no automatic reset (decided on REN-115). By hand, for another agent: `restart-agent.sh --pane <p> --session <id> --no-compact [--then "<prompt>"]`.

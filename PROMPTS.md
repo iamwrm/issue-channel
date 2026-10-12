@@ -50,6 +50,17 @@ Compact your context with the live-context skill: `ctx open`, tidy the file with
 
 To give another agent a cleaner context, use `session-fork mirror --full <its id>` and `spawn/restart-agent.sh --fork` instead ([README](README.md#agent-lifecycle)); never mirror your own session ([D8](docs/DECISIONS.md#d8-self-compaction-goes-through-the-neutral-live-context-skill)).
 
+## No-compact (reset an idle agent without a summary)
+
+Post on the agent's issue, after a long idle (prompt cache expired) and before asking it anything:
+
+```text
+/bot !no-compact
+<optional: the question for the reset session>
+```
+
+`/bot !no-compact <name>` picks one session when several listen. The channel matches it by code, so the stale context is never sent; a code reply reports `cc:<old> → cc:<new>`. See [spawn/README.md](spawn/README.md#no-compact).
+
 ## Dispatch to another issue
 
 ```text

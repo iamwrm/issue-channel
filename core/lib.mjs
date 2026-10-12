@@ -7,11 +7,15 @@ export const LINEAR_MARKER = '[//]: # (issue-channel:bot)'
 const isBotBody = body => (body ?? '').includes(BOT_MARKER) || (body ?? '').includes(LINEAR_MARKER)
 
 // `/bot` alone, `/bot <session>` (single token on the first line), or `/bot <free text>`.
+// `/bot !no-compact [<session>]` (exactly that first line) is a channel command, matched here by code and never
+// shown to the model: reset the session's context (see ../spawn/README.md). Lines after it go to the successor.
 export function parseTrigger(body) {
   const text = (body ?? '').replace(/^\s+/, '')
   const m = text.match(/^\/bot(?=\s|$)([^\n]*)/)
   if (!m) return null
   const rest = m[1].trim()
+  const cmd = rest.match(/^!no-compact(?:\s+([A-Za-z0-9_.-]+))?$/)
+  if (cmd) return { target: cmd[1] ?? null, command: 'no-compact', text: text.slice(m[0].length).trim() }
   const token = /^[A-Za-z0-9_.-]+$/.test(rest) ? rest : null
   return { target: token }
 }

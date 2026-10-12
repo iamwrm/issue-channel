@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readLog, mainChain, splitTurns, mirror, applyPlan, fork, handoff, isOwnSession, loadTurns, renderLive, parseLive, applyLive, forkLive } from './session-fork.mjs';
+import { readLog, mainChain, splitTurns, mirror, applyPlan, fork, handoff, isOwnSession, loadTurns, renderLive, parseLive, applyLive, forkLive, reset, lastExchange } from './session-fork.mjs';
 
 const SID = 'parent-session';
 let n = 0;
@@ -304,4 +304,34 @@ test('parallel tool calls: sibling results off the parent chain are put back, so
   assert.deepEqual(tail, ['subscribe to three issues', 'a1', 'a2', 'a3', 'a1', 'a2', 'a3', 'all three subscribed']);
   const turns = splitTurns(chain);
   assert.match(renderLive(turns, SID), /\[\[TURN 3\]\][\s\S]*r1[\s\S]*r2[\s\S]*r3[\s\S]*all three subscribed/);
+});
+
+test('reset (no-compact) keeps no turn: only a note with the log path, how to read it, and the last exchange', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sf-reset-'));
+  const src = join(dir, `${SID}.jsonl`);
+  const text = makeLog().map((e) => JSON.stringify(e)).join('\n') + '\n';
+  writeFileSync(src, text);
+  // The incomplete last turn is skipped: the last *complete* exchange is turn 2.
+  assert.deepEqual(lastExchange(loadTurns(src, { live: false })), { turn: 2, request: 'second prompt: secret OCELOT', reply: 'second reply' });
+  const r = reset(src, { title: 'w1' });
+  assert.equal(r.reset, true);
+  const out = readLog(r.dest);
+  const users = out.filter((e) => e.type === 'user');
+  assert.equal(users.length, 1);
+  const note = users[0].message.content;
+  assert.match(note, /\[no-compact reset\] This session continues Claude Code session parent-session \(cwd \/w\)/);
+  assert.ok(note.includes(src));
+  assert.match(note, /session-fork\.mjs mirror parent-session/);
+  assert.match(note, /<last-request>\nsecond prompt: secret OCELOT\n<\/last-request>/);
+  assert.match(note, /<last-reply>\nsecond reply\n<\/last-reply>/);
+  assert.ok(!JSON.stringify(out).includes('first reply'));
+  assert.equal(out.find((e) => e.type === 'ai-title').aiTitle, 'w1');
+  assert.equal(readFileSync(src, 'utf8'), text, 'the old log is the rollback and stays untouched');
+  // A long exchange is cut to the cap, with a marker.
+  const big = makeLog();
+  const long = join(dir, 'long.jsonl');
+  writeFileSync(long, big.map((e) => JSON.stringify(e.message?.content?.[0]?.text === 'second reply' ? { ...e, message: { ...e.message, content: [{ type: 'text', text: 'x'.repeat(50000) }] } } : e)).join('\n') + '\n');
+  const capped = readLog(reset(long, { cap: 1000 }).dest).find((e) => e.type === 'user').message.content;
+  assert.match(capped, /more chars, cut; the full text is in the log/);
+  assert.ok(capped.length < 4000);
 });

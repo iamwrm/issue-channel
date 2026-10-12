@@ -11,6 +11,14 @@ test('parseTrigger', () => {
   assert.equal(parseTrigger(null), null)
 })
 
+test('parseTrigger: !no-compact is matched by code, exactly', () => {
+  assert.deepEqual(parseTrigger('/bot !no-compact'), { target: null, command: 'no-compact', text: '' })
+  assert.deepEqual(parseTrigger('/bot !no-compact worker1\nwhat did we find?\n'), { target: 'worker1', command: 'no-compact', text: 'what did we find?' })
+  assert.deepEqual(parseTrigger('/bot   !no-compact  \n\n continue '), { target: null, command: 'no-compact', text: 'continue' })
+  for (const body of ['/bot please !no-compact', '/bot !nocompact', '/bot !no-compact a b', '/bot hi\n!no-compact', '/bot !no-compacted'])
+    assert.equal(parseTrigger(body).command, undefined, body)
+})
+
 test('isForSession', () => {
   assert.ok(isForSession({ target: null }, 'a', ['a', 'b']))
   assert.ok(isForSession({ target: 'a' }, 'a', []))

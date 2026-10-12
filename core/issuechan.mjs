@@ -12,7 +12,8 @@ import { createIssueEngine, ISSUE_TOOLS } from './engine.mjs'
 const log = (...a) => console.error('[issuechan]', ...a)
 
 // Adapter contract remains unchanged: agentEnv, agentFromCall/onBind,
-// agentAtStart, capabilities, arrival, resumeDelayMs and deliver(mcp, payload, {agent}).
+// agentAtStart, capabilities, arrival, resumeDelayMs and deliver(mcp, payload, {agent}); optional
+// noCompact(request, {log}) runs the `/bot !no-compact` swap (see engine.mjs noCompact).
 export async function runIssuechan(adapter) {
   const stateDir = process.env.ISSUECHAN_STATE_DIR ?? path.join(os.homedir(), '.local/state/issue-channel')
   const delay = Number(process.env.ISSUECHAN_RESUME_DELAY_MS ?? adapter.resumeDelayMs ?? 0)
@@ -35,7 +36,8 @@ export async function runIssuechan(adapter) {
   const ready = initialized.then(() => new Promise(resolve => { timer = setTimeout(resolve, delay) }))
   function getEngine() {
     engine ??= createIssueEngine({ agent, stateDir,
-      deliver: payload => adapter.deliver(mcp, payload, { agent }), log })
+      deliver: payload => adapter.deliver(mcp, payload, { agent }), log,
+      onNoCompact: adapter.noCompact ? request => adapter.noCompact(request, { log }) : undefined })
     return engine
   }
   async function bind(a, fromCall = false) {

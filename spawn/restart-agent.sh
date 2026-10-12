@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Restart a Claude Code agent IN PLACE (same herdr pane), optionally into a CLM-compacted fork of its session.
 #
-#   restart-agent.sh --pane <pane> --session <id> [--fork <live-context.md> [--keep-last]] [--then <prompt>]
-#                    [--name <herdr name>] [--wait-idle <s>]
+#   restart-agent.sh --pane <pane> --session <id> [--fork <live-context.md> [--keep-last] | --no-compact]
+#                    [--then <prompt>] [--name <herdr name>] [--wait-idle <s>]
 #
 #   plain:   /exit, then `$ISSUECHAN_LAUNCHER … --resume <id>` in the same pane: same session, same context,
 #            the channel restarts with the current code and resumes its subscriptions.
@@ -15,6 +15,10 @@
 #            The session's LAST turn is always dropped: it's the turn that ran `mirror` and did the edit, and the
 #            mirror output quotes the very blocks the edit drops (seen live: a dropped secret survived that way).
 #            --keep-last keeps it.
+#   --no-compact: like --fork, but no edit and no model work: `session-fork reset` writes a fork that keeps no
+#            turn, only a note with the old log's path, how to read it back, and the last exchange verbatim. For a
+#            big session idle past the prompt-cache TTL, so its next request doesn't re-read the whole context.
+#            The old session is untouched (`--resume <old id>` is the rollback). Triggered by `/bot !no-compact`.
 #   --then:  prompt sent to the agent once it's back (it knows nothing about the restart otherwise).
 #
 # Run it DETACHED when an agent restarts itself (its own turn has to end first):
@@ -24,10 +28,10 @@
 set -uo pipefail
 
 die() { echo "restart-agent: $*" >&2; exit 1; }
-usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 log() { echo "[$(date -u +%T)] $*" >&2; }
 
-pane='' sid='' plan='' then='' name='' wait_idle=1800 keep_last=''
+pane='' sid='' plan='' then='' name='' wait_idle=1800 keep_last='' reset=''
 while (($#)); do
   case $1 in
     --pane) pane=$2; shift 2 ;;
@@ -37,6 +41,7 @@ while (($#)); do
     --name) name=$2; shift 2 ;;
     --wait-idle) wait_idle=$2; shift 2 ;;
     --keep-last) keep_last=1; shift ;;
+    --no-compact) reset=1; shift ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1 (see --help)" ;;
   esac
@@ -46,6 +51,7 @@ ROOT="$(dirname "$HERE")"
 launcher=${ISSUECHAN_LAUNCHER:-claude}
 STATE_DIR=${ISSUECHAN_STATE_DIR:-$HOME/.local/state/issue-channel}
 [[ -n $pane && $sid =~ ^[0-9a-f-]{36}$ ]] || die "--pane and --session <uuid> are required"
+[[ -z $plan || -z $reset ]] || die "--fork and --no-compact exclude each other"
 [[ -z $plan || -f $plan ]] || die "--fork: no such file: $plan"
 [[ -z $plan ]] || [[ $(head -c 15 "$plan") == '[[LIVE_CONTEXT ' ]] \
   || die "--fork needs an edited live-context file from 'session-fork.mjs mirror --full' (a plan.json is not accepted)"
@@ -77,7 +83,15 @@ if [[ -n $plan ]]; then
   [[ $target =~ ^[0-9a-f-]{36}$ ]] || die "session-fork fork printed no id: $out"
   log "forked $sid -> $target ($(jq -r '"estimate ~\(.before) -> ~\(.tokens) tokens (not API usage; see ctx report), \(.entries) entries; blocks kept \(.kept)/\(.blocks), edited \(.edited), dropped \(.dropped), notes \(.notes)\(if .handoff then ", HANDOFF ONLY" else "" end); \(.diff)"' <<<"$out"))"
   jq -r '.warnings[]? | "warning: " + .' <<<"$out" | while read -r w; do log "$w"; done
+elif [[ -n $reset ]]; then
+  # From outside the session: its last turn is complete (it is idle), so nothing is treated as running.
+  out=$(CLAUDE_CODE_SESSION_ID='' node "$ROOT/session-fork/session-fork.mjs" reset "$sid" ${name:+--title "$name"} 2>&1) \
+    || die "session-fork reset failed: $out"
+  target=$(jq -r .id <<<"$out")
+  [[ $target =~ ^[0-9a-f-]{36}$ ]] || die "session-fork reset printed no id: $out"
+  log "no-compact: $sid -> $target (estimate ~$(jq -r .before <<<"$out") -> ~$(jq -r .tokens <<<"$out") tokens; not API usage)"
 fi
+forked=''; [[ $target != "$sid" ]] && forked=1
 
 # 3. Exit the running session and wait until its process is gone. A dialog or overlay left open after the turn
 #    (seen live: a feedback prompt) swallows typed text, so close it with Escape first and retry a few times.
@@ -88,12 +102,12 @@ for attempt in 1 2 3; do
   log "exit attempt $attempt: still running; screen:"$'\n'"$(herdr pane read "$pane" --source visible --lines 15 2>/dev/null | grep -v '^\s*$' | tail -8)"
 done
 # Nothing was handed over yet, so the running session keeps its subscriptions when this fails.
-[[ $(status) == gone ]] || die "agent in $pane did not exit; its session and issuechan state are untouched${plan:+ (fork $target is unused)}"
+[[ $(status) == gone ]] || die "agent in $pane did not exit; its session and issuechan state are untouched${forked:+ (fork $target is unused)}"
 log "exited"
 sleep 2
 
 # 4. Hand the issuechan state to the fork, now that the parent can no longer change it.
-if [[ -n $plan && -f $STATE_DIR/cc-$sid.json ]]; then
+if [[ -n $forked && -f $STATE_DIR/cc-$sid.json ]]; then
   node "$ROOT/session-fork/session-fork.mjs" handoff "$sid" "$target" >/dev/null || die "handoff failed"
   mv "$STATE_DIR/cc-$sid.json" "$STATE_DIR/cc-$sid.json.handed-off"
   log "issuechan state handed to $target"
@@ -131,6 +145,6 @@ log "resumed $target (channel pid ${pid:-?})"
 # 7. Tell the agent what happened and what to do next.
 [[ -n $then ]] && herdr agent prompt "$pane" "$then" >/dev/null
 
-jq -nc --arg pane "$pane" --arg from "$sid" --arg session "$target" --argjson forked "$([[ -n $plan ]] && echo true || echo false)" --argjson edit "$([[ -n $plan ]] && jq -c '{kept, blocks, edited, dropped, notes, handoff, diff}' <<<"$out" || echo null)" \
+jq -nc --arg pane "$pane" --arg from "$sid" --arg session "$target" --argjson forked "$([[ -n $forked ]] && echo true || echo false)" --argjson reset "$([[ -n $reset ]] && echo true || echo false)" --argjson edit "$([[ -n $plan ]] && jq -c '{kept, blocks, edited, dropped, notes, handoff, diff}' <<<"$out" || echo null)" \
   --arg pid "${pid:-}" --argjson seconds $((SECONDS - started)) \
-  '{pane: $pane, from: $from, session: $session, forked: $forked, edit: $edit, channel_pid: $pid, seconds: $seconds}'
+  '{pane: $pane, from: $from, session: $session, forked: $forked, reset: $reset, edit: $edit, channel_pid: $pid, seconds: $seconds}'
