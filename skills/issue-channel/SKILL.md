@@ -70,7 +70,7 @@ Comment ids are numbers on GitHub and UUIDs on Linear. Always pass the **full** 
 
 On **Claude Code**, compact with the **live-context** skill (`ctx open` → edit → `ctx apply`) and plain-restart with `spawn/restart-agent.sh`, detached, with `--then`. Rules: [reference/ops.md](reference/ops.md#restart-or-compact-yourself).
 
-**No-compact:** the user resets an idle session with `/bot !no-compact [<name>]`; the channel handles it in code, so you never see it. If your context starts with a `[no-compact reset]` note, follow it: read the old session back with `session-fork.mjs mirror <old id>` and targeted reads, only as far as the request needs, and verify live state before acting. A message typed in starting with `[issue-channel delivery after a no-compact reset …]` is a `/bot` from the user: answer it with `issue_reply` (its `trigger_comment` is an open request handed over to you).
+**No-compact:** the user resets an idle session with `/bot !no-compact [<name>]`; the channel handles it in code, so you never see it. If your context starts with a `[no-compact reset]` note, follow it: read the old session back with `session-fork.mjs mirror <old id>` and targeted reads, only as far as the request needs, and verify live state before acting. Text after the command reaches you as a normal `/bot` delivery.
 
 **After any restart or resume on Claude Code**, read your id with `echo $CLAUDE_CODE_SESSION_ID` and call `issue_rebind` with `agent_id: "cc:<that id>"` (a no-op when it already matches), then `issue_subscriptions`. A session started fresh and switched with `/resume` in the TUI keeps the fresh id in its channel and silently listens to nothing; rebinding resumes your saved subscriptions from their cursors, so `/bot`s posted meanwhile are still delivered.
 

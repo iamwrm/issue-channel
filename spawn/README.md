@@ -78,12 +78,12 @@ Reset a Claude Code agent's context **without a summary**, the counterpart of Pi
 ```text
 /bot !no-compact               every session listening on the issue (usually one)
 /bot !no-compact <name>        only that session; an unknown name resets nothing
-<further lines>                typed into the new session as its first prompt (an open /bot request it answers)
+<further lines>                a normal /bot for the new session, delivered by its own channel
 ```
 
 **Matched by code, never by the model.** Anything the model reads is already a request over the stale context, which is the cost being avoided. So `parseTrigger` (`core/lib.mjs`) recognises exactly that first line, and the channel (`core/engine.mjs` `noCompact`) doesn't deliver it. Instead it:
 
-1. saves the cursor past the command (plus the open request, when there is text), because the swap hands this state file over;
+1. keeps the cursor **before** the command and marks it (`resetBy`), because the swap hands this state file over: the successor's channel replays the command, sees it was handled, and delivers the text after it as a normal `/bot` (a channel message with 👀, not typed or pasted text);
 2. calls the adapter's `noCompact`, which starts [`no-compact.mjs`](no-compact.mjs) detached. A missing herdr pane fails here: the channel posts why and delivers the text as a normal `/bot`;
 3. holds back every later `/bot` (unflushed, so the successor gets them). If the swap fails before the old session exits, the channel listens again and delivers what it held.
 
@@ -92,3 +92,21 @@ Reset a Claude Code agent's context **without a summary**, the counterpart of Pi
 `session-fork reset` writes a fork that keeps **no turn**: one note with the old log's path, how to read it back (`session-fork mirror <old>`, bounded reads, verify live state, follow chained resets), and the **last exchange verbatim** (request and final reply, capped at 16k chars, about 4k tokens) so "continue" needs no reads. The old log is untouched: `--resume <old id>` is the rollback.
 
 There is no automatic reset (decided on REN-115). By hand, for another agent: `restart-agent.sh --pane <p> --session <id> --no-compact [--then "<prompt>"]`.
+
+## Live test (2026-10-12, Claude Code via `clauded`, throwaway mainbot#50, now closed)
+
+An agent spawned with `spawn-agent.sh` did realistic log triage over synthetic app/nginx logs, then got a no-compact with a follow-up question.
+
+| Run | What | Result |
+|---|---|---|
+| R1 | `/bot !no-compact` + question; the text was still typed in with `--then` | ✅ swap in 12 s, reply from code, correct answer, 👀 → 🚀. **But** herdr turned the multi-line text into a `<pasted_content>` block, which agents treat with caution. Hence the redesign below. |
+| R2 | `/bot !no-compact nctest2` + question; the successor's channel replays the command (`resetBy`) and delivers the text natively | ✅ swap in 12 s (idle → reset → exit → handoff → resume). The successor got a real channel message (`origin=channel`), answered correctly from the verbatim last exchange with no reads, and marked it done (👀 → 🚀). The old log was untouched. |
+
+Request sizes in R2 (API usage, input + cache read + cache write):
+
+| | Tokens | Cache write |
+|---|---|---|
+| Old session, last request | 43,072 | 1,114 |
+| Successor, first request | 28,286 | 2,853 |
+
+The floor is the system prompt plus tools (~28–35k here), so the saving is the context above it. That's small in a test session and large for a 200k+ session. Not measured: a truly cold cache after more than 1h idle. The successor's system-prompt prefix can still be warm from other sessions that share it, while the old session's own context cannot.

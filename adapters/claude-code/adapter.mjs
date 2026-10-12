@@ -22,14 +22,14 @@ export default {
   // `/bot !no-compact`: swap this session for a reset fork in its herdr pane (spawn/no-compact.mjs, detached, since
   // the swap ends this process). It must not need the model, so it fails here, before anything changes, when it
   // can't run.
-  noCompact({ repo, issue, session, agent, then, comment_id, reply_to, onFailed }, { log } = {}) {
+  noCompact({ repo, issue, session, agent, comment_id, reply_to, onFailed }, { log } = {}) {
     const pane = process.env.HERDR_PANE_ID
     if (!pane) throw new Error('the session is not in a herdr pane (HERDR_PANE_ID is not set)')
     if (agent?.agent !== 'cc') throw new Error('no Claude Code session id')
     const dir = path.join(os.tmpdir(), `no-compact-${agent.id}`)
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
     const req = path.join(dir, 'request.json')
-    fs.writeFileSync(req, JSON.stringify({ repo, issue, session, pane, from: agent.id, then, comment_id, reply_to }), { mode: 0o600 })
+    fs.writeFileSync(req, JSON.stringify({ repo, issue, session, pane, from: agent.id, comment_id, reply_to }), { mode: 0o600 })
     const out = fs.openSync(path.join(dir, 'swap.log'), 'a')
     const child = spawn(process.execPath, [path.join(ROOT, 'spawn/no-compact.mjs'), req], { detached: true, stdio: ['ignore', out, out] })
     child.on('exit', code => { if (code) { log?.(`no-compact swap exited ${code}; see ${dir}/swap.log`); onFailed?.() } })
