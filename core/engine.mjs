@@ -67,7 +67,8 @@ export function createIssueEngine(options = {}) {
   const registrations = new Map()
   const restoring = new Map()
   const cancelledRestores = new Set()
-  let stopped = false, renamed = false, error, stateError, operationError
+  const heldDuringReset = new Map() // subscription -> last /bot held back while a no-compact swap runs
+  let stopped = false, renamed = false, resetting = false, error, stateError, operationError
   let startPromise, stopPromise, queue = Promise.resolve()
   // Anonymous MCP runtimes use the historical session-named filename.
   let file = path.join(stateDir, `${agent ? `${agent.agent}-${agent.id}` : session}.json`)
@@ -75,7 +76,7 @@ export function createIssueEngine(options = {}) {
   const check = () => { if (stopped) throw stoppedError(); if (stateError) throw stateError }
   const wait = p => abortable(p, controller.signal).then(v => { check(); return v })
   const ghApi = (...a) => { check(); return wait(rawGhApi(...a)) }
-  const ghComment = (...a) => { check(); return wait(rawGhComment(...a)) }
+  const ghComment = (...a) => { check(); return wait((options.ghComment ?? rawGhComment)(...a)) } // injectable for tests
   const myLogin = () => { check(); return wait(rawMyLogin()) }
   const linear = Object.fromEntries(Object.entries(rawLinear).map(([k, v]) => [k, typeof v === 'function' ? (...a) => { check(); return wait(v(...a)) } : v]))
   const normId = (repo, id) => isLinear(repo) ? String(id) : Number(id)
@@ -278,6 +279,14 @@ export function createIssueEngine(options = {}) {
   }
   async function maybeDeliver(s, trig, ev) {
     if (!active(s)) return
+    // A no-compact swap is under way: leave everything after the command unflushed, so the successor, which
+    // resumes from the handed-over cursor, gets it instead of this session paying for one more full request.
+    if (resetting) { if (trig) heldDuringReset.set(s, { trig, ev }); return }
+    if (trig?.command === 'no-compact') {
+      // A command is never untargeted by accident: an unknown name means no session, not every session.
+      if (trig.target && trig.target !== session) { s.buffer.drain(); s.flushed = ev.seq; saveState(); return }
+      if (await noCompact(s, trig, ev)) return
+    }
     let sessions = []
     if (trig?.target && trig.target !== session) {
       const r = await api('GET', `/api/subscriptions?repo=${encodeURIComponent(s.repo)}&issue=${s.issue}`)
@@ -303,7 +312,60 @@ export function createIssueEngine(options = {}) {
     notify()
     log(`delivered ${items.length} item(s) for ${s.repo}#${s.issue} at seq ${ev.seq}`)
     // Only actual commands create open requests and reactions, even in updates mode.
-    if (!trig) return
+    if (trig) react(s, trig)
+  }
+
+  // `/bot !no-compact [name]`: matched by code, never delivered to this session. The harness adapter swaps the
+  // session for a reset fork (onNoCompact); text after the command line becomes the successor's first prompt and
+  // stays an open request, handed over with the subscription. Returns false to fall back to a normal delivery.
+  async function noCompact(s, trig, ev) {
+    const items = s.buffer.peek()
+    const linearRoot = isLinear(s.repo) ? String(ev.parent_id ?? s.roots.get(String(ev.comment_id)) ?? ev.comment_id) : undefined
+    const then = trig.text ? [
+      `[issue-channel delivery after a no-compact reset, typed into this new session] repo="${s.repo}" issue="${s.issue}" session="${session}" trigger_comment="${trig.comment_id}"`,
+      formatDelivery({ repo: s.repo, issue: s.issue, title: s.buffer.title, trigger: trig, items }),
+    ].join('\n') : null
+    const saved = { flushed: s.flushed, open: new Set(s.open) }
+    // Saved before the swap starts: the swap hands this state file to the successor.
+    s.flushed = ev.seq
+    if (then) s.open.add(trig.comment_id)
+    if (linearRoot) s.roots.set(String(ev.comment_id), linearRoot)
+    saveState()
+    try {
+      if (typeof options.onNoCompact !== 'function') throw new Error('this harness has no no-compact support')
+      await wait(Promise.resolve(options.onNoCompact({ repo: s.repo, issue: s.issue, session, agent, then, comment_id: trig.comment_id, reply_to: linearRoot, onFailed: swapFailed })))
+    } catch (e) {
+      if (!active(s)) return true
+      s.flushed = saved.flushed
+      s.open = saved.open
+      saveState()
+      log(`no-compact on ${s.repo}#${s.issue}: ${e.message}`)
+      const summary = `!no-compact failed, delivering as a normal /bot: ${e.message}`
+      const body = `The session was not reset (${e.message}).${trig.text ? ' The text after the command was delivered to the session as usual.' : ''}`
+      const tag = replyTag({ name: session, agent })
+      await (isLinear(s.repo) ? linear.comment(s.repo, s.issue, formatReply({ summary, body, tag, format: 'linear' }), { parentId: linearRoot })
+        : ghComment(s.repo, s.issue, formatReply({ summary, body, tag }))).catch(err => log(`no-compact failure reply: ${err.message}`))
+      if (!trig.text) { s.buffer.drain(); s.flushed = ev.seq; saveState(); return true }
+      return false
+    }
+    resetting = true
+    s.buffer.drain()
+    notify()
+    log(`no-compact on ${s.repo}#${s.issue} at seq ${ev.seq}: swap started${then ? ', text goes to the successor' : ''}`)
+    if (then) react(s, trig)
+    return true
+  }
+  // The swap process gave up before this session exited (it posts why): listen again, and deliver any /bot
+  // that was held back meanwhile, with everything buffered before it.
+  function swapFailed() {
+    if (!resetting || stopped) return
+    resetting = false
+    log('no-compact swap failed; delivering normally again')
+    const held = [...heldDuringReset]
+    heldDuringReset.clear()
+    for (const [s, { trig, ev }] of held) serialize(() => active(s) ? maybeDeliver(s, trig, ev) : undefined).catch(e => log(`redeliver after failed no-compact: ${e.message}`))
+  }
+  function react(s, trig) {
     if (isLinear(s.repo)) {
       if (LINEAR_REACTION) s.reacting.set(trig.comment_id, linear.react(trig.comment_id, LINEAR_REACTION).catch(e => { log(`reaction on ${issueLabel(s.repo, s.issue)} comment ${trig.comment_id} failed: ${e.message}`); return null }))
     } else if (REACTION) {
