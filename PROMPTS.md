@@ -56,7 +56,7 @@ Post on the agent's issue, after a long idle (prompt cache expired) and before a
 
 ```text
 /bot !no-compact
-<optional: the question for the reset session>
+<optional: a question, delivered to the reset session as a normal /bot>
 ```
 
 `/bot !no-compact <name>` picks one session when several listen. The channel matches it by code, so the stale context is never sent; a code reply reports `cc:<old> → cc:<new>`. See [spawn/README.md](spawn/README.md#no-compact).

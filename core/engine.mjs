@@ -109,6 +109,7 @@ export function createIssueEngine(options = {}) {
         if (!s || !validRef(s.repo, s.issue) || key !== `${s.repo}#${s.issue}` ||
             !Number.isSafeInteger(s.flushed) || s.flushed < 0 || (s.mode !== undefined && !validMode(s.mode)) ||
             (s.open !== undefined && (!Array.isArray(s.open) || s.open.some(id => isLinear(s.repo) ? typeof id !== 'string' : !Number.isSafeInteger(id) || id <= 0))) ||
+            (s.resetBy !== undefined && typeof s.resetBy !== 'string') ||
             (s.roots !== undefined && (!s.roots || typeof s.roots !== 'object' || Array.isArray(s.roots) || Object.values(s.roots).some(id => typeof id !== 'string')))) throw new Error(`invalid subscription ${key}`)
       }
       return state
@@ -124,7 +125,7 @@ export function createIssueEngine(options = {}) {
     state.session = session
     if (forget) delete state.subs[forget]
     for (const [key, s] of subs) state.subs[key] = { repo: s.repo, issue: s.issue, mode: s.mode,
-      flushed: s.flushed, open: [...s.open], roots: Object.fromEntries(s.roots) }
+      flushed: s.flushed, open: [...s.open], roots: Object.fromEntries(s.roots), ...(s.resetBy ? { resetBy: s.resetBy } : {}) }
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 })
     const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`
     try {
@@ -190,7 +191,7 @@ export function createIssueEngine(options = {}) {
     if (!Number.isSafeInteger(from) || from < 0) throw new Error('invalid server cursor')
     const s = { repo, issue, mode: mode ?? saved?.mode ?? 'bot', cursor: from, flushed: from,
       buffer: new IssueBuffer({ allowedAuthors: allowed }), controller: new AbortController(), connected: false,
-      registered: false, queried: false, open: new Set(saved?.open ?? []), roots: new Map(Object.entries(saved?.roots ?? {})), reacting: new Map() }
+      registered: false, queried: false, open: new Set(saved?.open ?? []), roots: new Map(Object.entries(saved?.roots ?? {})), reacting: new Map(), resetBy: saved?.resetBy }
     // Registration failure must not create a durable subscription or report healthy.
     try {
       if (saved) await replayDelivered(s)
@@ -285,7 +286,11 @@ export function createIssueEngine(options = {}) {
     if (trig?.command === 'no-compact') {
       // A command is never untargeted by accident: an unknown name means no session, not every session.
       if (trig.target && trig.target !== session) { s.buffer.drain(); s.flushed = ev.seq; saveState(); return }
-      if (await noCompact(s, trig, ev)) return
+      if (s.resetBy !== String(trig.comment_id) && await noCompact(s, trig, ev)) return
+      // This command already reset the session (this is its successor, resuming from the handed-over cursor), or
+      // the reset could not run: from here on it is an ordinary /bot, and without text there is nothing to say.
+      s.resetBy = undefined
+      if (!trig.text) { s.buffer.drain(); s.flushed = ev.seq; saveState(); return }
     }
     let sessions = []
     if (trig?.target && trig.target !== session) {
@@ -316,54 +321,43 @@ export function createIssueEngine(options = {}) {
   }
 
   // `/bot !no-compact [name]`: matched by code, never delivered to this session. The harness adapter swaps the
-  // session for a reset fork (onNoCompact); text after the command line becomes the successor's first prompt and
-  // stays an open request, handed over with the subscription. Returns false to fall back to a normal delivery.
+  // session for a reset fork (onNoCompact). The cursor stays BEFORE the command and `resetBy` marks it, and this
+  // state file is handed to the successor: its channel replays the command, sees it was handled, and delivers the
+  // text after it (if any) as a normal /bot, so the model gets it as a channel message, not typed or pasted text.
+  // Returns false when the swap can't start (then it is delivered here, normally).
   async function noCompact(s, trig, ev) {
-    const items = s.buffer.peek()
     const linearRoot = isLinear(s.repo) ? String(ev.parent_id ?? s.roots.get(String(ev.comment_id)) ?? ev.comment_id) : undefined
-    const then = trig.text ? [
-      `[issue-channel delivery after a no-compact reset, typed into this new session] repo="${s.repo}" issue="${s.issue}" session="${session}" trigger_comment="${trig.comment_id}"`,
-      formatDelivery({ repo: s.repo, issue: s.issue, title: s.buffer.title, trigger: trig, items }),
-    ].join('\n') : null
-    const saved = { flushed: s.flushed, open: new Set(s.open) }
-    // Saved before the swap starts: the swap hands this state file to the successor.
-    s.flushed = ev.seq
-    if (then) s.open.add(trig.comment_id)
-    if (linearRoot) s.roots.set(String(ev.comment_id), linearRoot)
+    s.resetBy = String(trig.comment_id)
     saveState()
     try {
       if (typeof options.onNoCompact !== 'function') throw new Error('this harness has no no-compact support')
-      await wait(Promise.resolve(options.onNoCompact({ repo: s.repo, issue: s.issue, session, agent, then, comment_id: trig.comment_id, reply_to: linearRoot, onFailed: swapFailed })))
+      await wait(Promise.resolve(options.onNoCompact({ repo: s.repo, issue: s.issue, session, agent, comment_id: trig.comment_id,
+        reply_to: linearRoot, onFailed: () => swapFailed(s, trig, ev) })))
     } catch (e) {
       if (!active(s)) return true
-      s.flushed = saved.flushed
-      s.open = saved.open
-      saveState()
       log(`no-compact on ${s.repo}#${s.issue}: ${e.message}`)
-      const summary = `!no-compact failed, delivering as a normal /bot: ${e.message}`
-      const body = `The session was not reset (${e.message}).${trig.text ? ' The text after the command was delivered to the session as usual.' : ''}`
+      const summary = `!no-compact failed: ${e.message}`
+      const body = `The session was not reset (${e.message}).${trig.text ? ' The text after the command was delivered to the session as a normal /bot.' : ''}`
       const tag = replyTag({ name: session, agent })
       await (isLinear(s.repo) ? linear.comment(s.repo, s.issue, formatReply({ summary, body, tag, format: 'linear' }), { parentId: linearRoot })
         : ghComment(s.repo, s.issue, formatReply({ summary, body, tag }))).catch(err => log(`no-compact failure reply: ${err.message}`))
-      if (!trig.text) { s.buffer.drain(); s.flushed = ev.seq; saveState(); return true }
       return false
     }
     resetting = true
-    s.buffer.drain()
     notify()
-    log(`no-compact on ${s.repo}#${s.issue} at seq ${ev.seq}: swap started${then ? ', text goes to the successor' : ''}`)
-    if (then) react(s, trig)
+    log(`no-compact on ${s.repo}#${s.issue} at seq ${ev.seq}: swap started`)
     return true
   }
-  // The swap process gave up before this session exited (it posts why): listen again, and deliver any /bot
-  // that was held back meanwhile, with everything buffered before it.
-  function swapFailed() {
+  // The swap process gave up before this session exited (it posts why): listen again. Deliver what was held back
+  // meanwhile, or else the command's own text, as a normal /bot.
+  function swapFailed(s, trig, ev) {
     if (!resetting || stopped) return
     resetting = false
     log('no-compact swap failed; delivering normally again')
-    const held = [...heldDuringReset]
+    const held = new Map(heldDuringReset)
     heldDuringReset.clear()
-    for (const [s, { trig, ev }] of held) serialize(() => active(s) ? maybeDeliver(s, trig, ev) : undefined).catch(e => log(`redeliver after failed no-compact: ${e.message}`))
+    if (!held.has(s)) held.set(s, { trig, ev })
+    for (const [sub, h] of held) serialize(() => active(sub) ? maybeDeliver(sub, h.trig, h.ev) : undefined).catch(e => log(`redeliver after failed no-compact: ${e.message}`))
   }
   function react(s, trig) {
     if (isLinear(s.repo)) {

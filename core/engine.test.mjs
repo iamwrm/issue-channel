@@ -382,7 +382,7 @@ test('state corruption after start is never overwritten by subscription mutation
   assert.equal(fs.readFileSync(f.file, 'utf8'), '{corrupt')
 })
 
-test('/bot !no-compact is handled by code: never delivered, text handed to the successor, unknown name is nobody', async t => {
+test('/bot !no-compact is handled by code: never delivered here; the successor delivers its text natively', async t => {
   const f = await fixture(t), calls = []
   const e = f.make({ onNoCompact: r => { calls.push(r) } })
   await subscribe(e)
@@ -391,38 +391,58 @@ test('/bot !no-compact is handled by code: never delivered, text handed to the s
   assert.equal(calls.length, 0, 'an unknown name targets no session')
   f.events.push(event(3, 12, '/bot !no-compact\nwhat did we find?'))
   await until(() => calls.length === 1)
-  assert.equal(f.deliveries.length, 0)
-  assert.match(calls[0].then, /trigger_comment="12"/)
-  assert.match(calls[0].then, /what did we find\?/)
   assert.equal(calls[0].comment_id, 12)
-  const state = JSON.parse(fs.readFileSync(f.file, 'utf8')).subs[`${repo}#1`]
-  assert.equal(state.flushed, 3, 'saved before the swap, which hands this file over')
-  assert.deepEqual(state.open, [12], 'the successor answers the text and marks it done')
-  // While the swap runs, later /bot comments stay unflushed for the successor.
+  // While the swap runs, later /bot comments are held, unflushed.
   f.events.push(event(4, 13, '/bot are you there?'))
   await until(() => e.getStatus().subscriptions[0].cursor === 4)
   assert.equal(f.deliveries.length, 0)
-  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).subs[`${repo}#1`].flushed, 3)
-  // A failed swap listens again and delivers what was held back.
-  calls[0].onFailed()
-  await until(() => f.deliveries.length === 1)
-  assert.match(f.deliveries[0].content, /are you there\?/)
+  const state = JSON.parse(fs.readFileSync(f.file, 'utf8')).subs[`${repo}#1`]
+  assert.equal(state.flushed, 2, 'the cursor stays before the command')
+  assert.equal(state.resetBy, '12')
+  // The swap: this process ends, the state file is handed over, the successor resumes from it.
+  await e.stop()
+  const succ = f.make({ onNoCompact: r => { calls.push(r) } })
+  await succ.start()
+  await until(() => f.deliveries.length === 2)
+  assert.equal(calls.length, 1, 'the successor does not reset again')
+  assert.equal(f.deliveries[0].meta.trigger_comment, '12')
+  assert.match(f.deliveries[0].content, /what did we find\?/)
+  assert.doesNotMatch(f.deliveries[0].content, /are you there/)
+  assert.equal(f.deliveries[1].meta.trigger_comment, '13')
+  const after = JSON.parse(fs.readFileSync(f.file, 'utf8')).subs[`${repo}#1`]
+  assert.equal(after.resetBy, undefined)
+  assert.deepEqual(after.open, [12, 13])
 })
 
-test('/bot !no-compact without text opens no request; a hook that cannot run falls back to delivery', async t => {
+test('/bot !no-compact: no text means nothing to deliver; a failed swap or a hook that cannot run delivers normally', async t => {
   const f = await fixture(t), posted = [], calls = []
-  const e = f.make({ onNoCompact: r => { calls.push(r) }, ghComment: async (...a) => { posted.push(a) } })
+  const e = f.make({ onNoCompact: r => { calls.push(r) } })
   await subscribe(e)
   f.events.push(event(1, 10, '/bot !no-compact'))
   await until(() => calls.length === 1)
-  assert.equal(calls[0].then, null)
-  assert.deepEqual(e.getStatus().subscriptions[0].openRequests, [])
-  const g = await fixture(t)
-  const e2 = g.make({ onNoCompact: () => { throw new Error('not in herdr') }, ghComment: async (...a) => { posted.push(a) } })
+  await e.stop()
+  const succ = f.make({ onNoCompact: r => { calls.push(r) } })
+  await succ.start()
+  await until(() => JSON.parse(fs.readFileSync(f.file, 'utf8')).subs[`${repo}#1`].flushed === 1)
+  assert.equal(f.deliveries.length, 0)
+  assert.equal(calls.length, 1)
+
+  const g = await fixture(t), gcalls = []
+  const e2 = g.make({ onNoCompact: r => { gcalls.push(r) } })
   await subscribe(e2)
-  g.events.push(event(1, 20, '/bot !no-compact\nstatus?'))
+  g.events.push(event(1, 20, '/bot !no-compact\nstatus?'), event(2, 21, '/bot later'))
+  await until(() => e2.getStatus().subscriptions[0].cursor === 2)
+  assert.equal(g.deliveries.length, 0)
+  gcalls[0].onFailed()
   await until(() => g.deliveries.length === 1)
-  assert.match(g.deliveries[0].content, /status\?/)
+  assert.match(g.deliveries[0].content, /status\?[\s\S]*later/, 'held /bot delivered with everything before it')
+
+  const h = await fixture(t)
+  const e3 = h.make({ onNoCompact: () => { throw new Error('not in herdr') }, ghComment: async (...a) => { posted.push(a) } })
+  await subscribe(e3)
+  h.events.push(event(1, 30, '/bot !no-compact\nstatus?'))
+  await until(() => h.deliveries.length === 1)
+  assert.match(h.deliveries[0].content, /status\?/)
   assert.equal(posted.length, 1)
-  assert.match(posted[0][2], /!no-compact failed.*not in herdr/)
+  assert.match(posted[0][2], /!no-compact failed: not in herdr/)
 })
