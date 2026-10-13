@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, lineDiff, BOT_MARKER, replyTag, resolveAgent } from './lib.mjs'
+import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, formatReplyFooter, lineDiff, BOT_MARKER, LINEAR_MARKER, replyTag, resolveAgent } from './lib.mjs'
 
 test('parseTrigger', () => {
   assert.deepEqual(parseTrigger('/bot'), { target: null })
@@ -163,4 +163,31 @@ test('updates formatting has no invented /bot and replay filters bot issue bodie
 
 test('lineDiff', () => {
   assert.equal(lineDiff('a\nb\nc', 'a\nB\nc'), '  a\n- b\n+ B\n  c')
+})
+
+test('reply footer formats the requested runtime telemetry without inventing unknown values', () => {
+  const metadata = { provider: 'openai-codex', model: 'gpt-6.1-sol', thinkingLevel: 'high', contextPercent: 30, contextWindow: 1000000 }
+  assert.equal(formatReplyFooter(metadata), 'openai-codex/gpt-6.1-sol:high 30%/1M')
+  assert.equal(formatReplyFooter({ ...metadata, contextPercent: 29.6, contextWindow: 272000 }), 'openai-codex/gpt-6.1-sol:high 30%/272k')
+  assert.equal(formatReplyFooter({ ...metadata, thinkingLevel: 'off', contextPercent: 0, contextWindow: 500000 }), 'openai-codex/gpt-6.1-sol:off 0%/500k')
+  assert.equal(formatReplyFooter({ ...metadata, contextPercent: 101, contextWindow: 1048576 }), 'openai-codex/gpt-6.1-sol:high 101%/1.05M')
+  for (const value of [undefined, null, NaN, Infinity, -1, '30']) {
+    assert.equal(formatReplyFooter({ ...metadata, contextPercent: value }), 'openai-codex/gpt-6.1-sol:high ?%/1M')
+  }
+  for (const value of [undefined, null, NaN, Infinity, 0, -1, '1000000']) {
+    assert.equal(formatReplyFooter({ ...metadata, contextWindow: value }), 'openai-codex/gpt-6.1-sol:high 30%/?')
+  }
+  assert.equal(formatReplyFooter({}), 'unknown/unknown:unknown ?%/?')
+  assert.equal(formatReplyFooter({ provider: 'p\n/bot', model: '<details>', thinkingLevel: '**high**' }), 'unknown/unknown:unknown ?%/?')
+})
+
+test('runtime footer is the last visible line outside both reply toggles, before the invisible marker', () => {
+  const metadata = { provider: 'p', model: 'm', thinkingLevel: 'high', contextPercent: 30, contextWindow: 1000000 }
+  for (const [format, close, marker] of [['github', '</details>', BOT_MARKER], ['linear', '+++', LINEAR_MARKER]]) {
+    const reply = formatReply({ summary: 's', body: 'body', format, metadata })
+    assert.ok(reply.endsWith(`${close}\n\np/m:high 30%/1M\n\n${marker}\n`))
+    const b = new IssueBuffer({ allowedAuthors: ['me'] })
+    assert.equal(b.add(c(1, 10, `/bot\n${reply}`)), null)
+    assert.equal(b.peek().length, 0, 'marked replies still cannot trigger feedback')
+  }
 })

@@ -446,3 +446,17 @@ test('/bot !no-compact: no text means nothing to deliver; a failed swap or a hoo
   assert.equal(posted.length, 1)
   assert.match(posted[0][2], /!no-compact failed: not in herdr/)
 })
+
+test('reply metadata comes only from adapter call context; old callers and schemas stay compatible', async t => {
+  const f = await fixture(t), posted = []
+  const e = f.make({ ghComment: async (...args) => { posted.push(args); return 'https://github.test/comment' } })
+  const args = { repo, issue: 1, summary: 's', body: 'b', done: false,
+    metadata: { provider: 'spoofed', model: 'spoofed', contextPercent: 99 } }
+  const replyMetadata = { provider: 'p', model: 'm', thinkingLevel: 'high', contextPercent: 30, contextWindow: 1000000 }
+  assert.equal(resultText(await e.callTool('issue_reply', args, { replyMetadata })), 'https://github.test/comment')
+  assert.ok(posted[0][2].endsWith(`p/m:high 30%/1M\n\n${BOT_MARKER}\n`))
+  assert.doesNotMatch(posted[0][2], /spoofed/)
+  assert.equal(resultText(await e.callTool('issue_reply', args)), 'https://github.test/comment')
+  assert.doesNotMatch(posted[1][2], /spoofed|30%/)
+  assert.equal(ISSUE_TOOLS.find(t => t.name === 'issue_reply').inputSchema.properties.metadata, undefined)
+})

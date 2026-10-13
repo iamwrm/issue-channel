@@ -34,6 +34,29 @@ The five native tools are `issue_subscribe`, `issue_unsubscribe`, `issue_subscri
 - Reply on the original issue with `issue_reply`; Linear replies go in the trigger's thread. Use `done=false` for progress and exact `comment_ids` when finishing one of several requests. The defaults still complete every open request on that issue; avoid that when another request is outstanding.
 - New subscriptions start **now**. Check older comments separately for unanswered requests. When asked to listen to a Linear issue, set it In Progress unless already started or closed, using the existing skill/script.
 
+## Reply telemetry footer
+
+Pi's `issue_reply` automatically adds a final visible line **outside** the
+collapsed reply, on GitHub and Linear:
+
+```text
+openai-codex/gpt-6.1-sol:high 30%/1M
+```
+
+This is the active provider/model, thinking level, and estimated context usage
+at tool execution. `1M` means a configured 1,000,000-token context window, not
+cumulative token usage; the percentage is rounded to the nearest whole percent.
+The values come from the current Pi execution context (`ctx.model`,
+`pi.getThinkingLevel()`, `ctx.getContextUsage()`), never the reply text or
+model-supplied tool arguments. Context limits use decimal `k`/`M` abbreviations.
+Unavailable usage (e.g. after compaction) is `?%`; an unavailable limit is `?`.
+Unknown model/reasoning fields are `unknown`. The invisible bot marker remains
+last so replies cannot trigger feedback.
+
+The shared formatter accepts adapter-owned telemetry, but Claude/Codex MCP and
+direct CLI replies retain their previous layout until they supply telemetry;
+no Pi runtime numbers are guessed for another harness. No tool schema changed.
+
 ## Small TUI marker
 
 The standard footer shows `● issue #44`, `● issue REN-108`, or `● issues 3`. A disconnected listener shows `○ … · reconnecting`; unconsumed deliveries add `· queued N`. The marker is hidden with no subscriptions. It updates on subscribe/unsubscribe, reconnect, reload and session replacement, and inherits Pi's footer theme without fixed/cached ANSI colors.

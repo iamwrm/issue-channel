@@ -171,18 +171,32 @@ export const isLinear = repo => /^linear:[A-Za-z0-9]+$/.test(repo ?? '')
 export const isGitHub = repo => /^[\w.-]+\/[\w.-]+$/.test(repo ?? '')
 export const issueLabel = (repo, issue) => isLinear(repo) ? `Linear issue ${repo.slice(7)}-${issue}` : `GitHub issue ${repo}#${issue}`
 
+// Runtime-owned reply telemetry, never numbers guessed by the model. Keep it a
+// single plain-text line; invalid/unavailable fields are explicitly unknown.
+export function formatReplyFooter(metadata = {}) {
+  const atom = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value) ? value : 'unknown'
+  const percent = typeof metadata.contextPercent === 'number' && Number.isFinite(metadata.contextPercent) && metadata.contextPercent >= 0
+    ? String(Math.round(metadata.contextPercent)) : '?'
+  const n = metadata.contextWindow
+  const limit = typeof n === 'number' && Number.isFinite(n) && n > 0
+    ? n >= 1e6 ? `${Number((n / 1e6).toFixed(2))}M` : n >= 1e3 ? `${Number((n / 1e3).toFixed(2))}k` : String(n)
+    : '?'
+  return `${atom(metadata.provider)}/${atom(metadata.model)}:${atom(metadata.thinkingLevel)} ${percent}%/${limit}`
+}
+
 // Reply layout on the issue: "🤖 <tag> · <summary>", then a clickable "Full reply" toggle.
 // Linear: the reply sits in the /bot comment's thread, the toggle is Linear's collapsible section (+++), and the
 // invisible LINEAR_MARKER tells replies apart when the token acts as a user (as the app, the author does too).
-export function formatReply({ summary, body, tag, format = 'github' }) {
+export function formatReply({ summary, body, tag, format = 'github', metadata }) {
   const line = String(summary ?? '').replace(/\s+/g, ' ').trim()
   if (!line) throw new Error('summary is required')
   const full = String(body ?? '').trim()
   if (!full) throw new Error('body is required')
   const head = tag ? `🤖 ${tag} · ${line}` : `🤖 ${line}`
-  if (format === 'linear') return `${head}\n\n+++ Full reply\n\n${full}\n\n+++\n\n${LINEAR_MARKER}\n`
+  const footer = metadata === undefined ? '' : `${formatReplyFooter(metadata)}\n\n`
+  if (format === 'linear') return `${head}\n\n+++ Full reply\n\n${full}\n\n+++\n\n${footer}${LINEAR_MARKER}\n`
   const esc = head.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${BOT_MARKER}\n`
+  return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${footer}${BOT_MARKER}\n`
 }
 
 export function formatDelivery({ repo, issue, title, trigger, items }) {
