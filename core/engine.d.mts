@@ -3,7 +3,15 @@ export interface IssueSubscriptionStatus { repo: string; issue: number; mode: 'b
 export interface IssueStatus { session: string; subscriptions: IssueSubscriptionStatus[]; error?: string; }
 export interface IssueTool { name: string; description: string; inputSchema: Record<string, unknown>; }
 export interface IssueToolResult { content: { type: 'text'; text: string }[]; isError?: boolean; }
-export interface IssueEngine { start(): Promise<void>; stop(): Promise<void>; callTool(name: string, args?: Record<string, unknown>): Promise<IssueToolResult>; getStatus(): IssueStatus; }
+export interface ReplyMetadata {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+  contextWindow?: number;
+  contextPercent?: number | null;
+}
+export interface IssueCallContext { replyMetadata?: ReplyMetadata; }
+export interface IssueEngine { start(): Promise<void>; stop(): Promise<void>; callTool(name: string, args?: Record<string, unknown>, context?: IssueCallContext): Promise<IssueToolResult>; getStatus(): IssueStatus; }
 export const ISSUE_TOOLS: IssueTool[];
 export function createIssueEngine(options: {
   agent: { agent: string; id: string };

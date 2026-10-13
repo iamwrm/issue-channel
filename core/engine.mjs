@@ -368,7 +368,7 @@ export function createIssueEngine(options = {}) {
     }
   }
 
-  async function callTool(name, args = {}) {
+  async function callTool(name, args = {}, context = {}) {
     try {
       await start()
       const result = await serialize(async () => {
@@ -387,8 +387,9 @@ export function createIssueEngine(options = {}) {
         if (name === 'issue_reply') {
           const tag = replyTag({ name: session, agent })
           // Validate the reply before any external side effect.
-          const body = formatReply({ ...a, tag })
-          const url = isLinear(a.repo) ? await linearReply(a, tag) : await ghComment(a.repo, a.issue, body)
+          const metadata = context.replyMetadata // adapter-owned, not a model-facing tool parameter
+          const body = formatReply({ ...a, tag, metadata })
+          const url = isLinear(a.repo) ? await linearReply(a, tag, metadata) : await ghComment(a.repo, a.issue, body)
           return text(a.done === false ? url : `${url}\n${await markDone(a.repo, a.issue, a.comment_ids)}`)
         }
         if (name === 'issue_done') return text(await markDone(a.repo, a.issue, a.comment_ids))
@@ -458,11 +459,11 @@ export function createIssueEngine(options = {}) {
   }
 
   // Reply/done helpers intentionally retain the existing GitHub/Linear semantics.
-  async function linearReply(a, tag) {
+  async function linearReply(a, tag, metadata) {
     const s = subs.get(`${a.repo}#${a.issue}`)
     const cid = a.reply_to ?? a.comment_ids?.[0] ?? [...(s?.open ?? [])].at(-1)
     const parentId = cid == null ? undefined : (s?.roots.get(String(cid)) ?? String(cid))
-    const c = await linear.comment(a.repo, a.issue, formatReply({ ...a, tag, format: 'linear' }), { parentId })
+    const c = await linear.comment(a.repo, a.issue, formatReply({ ...a, tag, format: 'linear', metadata }), { parentId })
     return c.url
   }
 

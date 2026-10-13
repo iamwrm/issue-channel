@@ -72,10 +72,11 @@ export default function (pi: ExtensionAPI) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000000, maxTokens: 1024 }],
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
+      const inputTokens = Number(process.env.ISSUECHAN_TEST_CONTEXT_TOKENS ?? 0);
       const message: any = {
         role: 'assistant', content: [], api: model.api, provider: model.provider, model: model.id,
         timestamp: Date.now(), stopReason: 'pending',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        usage: { input: inputTokens, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: inputTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
       };
       queueMicrotask(async () => {

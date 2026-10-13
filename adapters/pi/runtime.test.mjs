@@ -81,6 +81,7 @@ test('startup flags, idle native user delivery, targeting, done/reply/unsubscrib
   assert.match(posted[0].body, /offline summary/)
   assert.match(posted[0].body, /offline full reply/)
   assert.match(posted[0].body, /pi/)
+  assert.match(posted[0].body, /issuechan-test\/deterministic:off \d+%\/1M\n\n<!-- issue-channel:bot -->\n$/);
   await rpc.tool('issue_unsubscribe', { repo: REPO, issue: 1 })
   assert.deepEqual(await f.server.registered(1), [])
   await f.server.comment(1, '/bot native must-not-deliver')
@@ -375,4 +376,14 @@ test('reload and restart/resume recover subscriptions without replaying persiste
   await f.server.comment(1, '/bot native old-session-must-not-leak')
   await sleep(250)
   assert.equal(deliveries(await rpc.messages()).length, 0)
+})
+
+test('native reply footer uses actual provider usage and configured context window', options, async t => {
+  const f = await fixture(t)
+  f.env.ISSUECHAN_TEST_CONTEXT_TOKENS = '300000'
+  const rpc = await f.rpc()
+  await rpc.tool('issue_reply', { repo: REPO, issue: 1, summary: 'usage proof', body: 'full text', done: false })
+  const posted = jsonLines(f.env.ISSUECHAN_TEST_GH_LOG)
+  assert.equal(posted.length, 1)
+  assert.ok(posted[0].body.endsWith('</details>\n\nissuechan-test/deterministic:off 30%/1M\n\n<!-- issue-channel:bot -->\n'))
 })
