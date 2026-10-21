@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Spawn a Claude Code agent in a new herdr tab and have it listen to a GitHub issue.
+# Spawn a Claude Code agent in a new herdr tab and have it listen to a GitHub or Linear issue.
 #
 # The launch rules live here so agents don't have to remember them:
 #   - only in a new herdr tab (never a split pane, tmux or a background shell)
 #   - only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`
 #     (ISSUECHAN_LAUNCHER defaults to `claude`; set it to a wrapper if you use one. Never `-p`, which can't load channels)
 #
-# Usage: spawn-agent.sh --name <name> --issue <owner/repo#n> [--resume <session-id>]
+# Usage: spawn-agent.sh --name <name> --issue <owner/repo#n | linear:TEAM#n> [--resume <session-id>]
 #                       [--task <text>] [--cwd <dir>] [--timeout <s>]
 # Prints JSON: {"name", "tab", "pane", "issue", "reply", "agent"}. On failure the new tab is closed again,
 # so a failed spawn leaves no half-started agent behind; a retry under the same name is safe.
@@ -36,10 +36,17 @@ while (($#)); do
 done
 
 [[ ${HERDR_ENV:-} == 1 ]] || die "not running inside a herdr pane (HERDR_ENV != 1)"
-for bin in herdr "$launcher" gh jq; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
 [[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "--name must match [a-z][a-z0-9_-]{0,31}"
-[[ $issue =~ ^([^/#[:space:]]+/[^/#[:space:]]+)#([0-9]+)$ ]] || die "--issue must look like owner/repo#123"
-repo=${BASH_REMATCH[1]} number=${BASH_REMATCH[2]}
+if [[ $issue =~ ^linear:([A-Z][A-Z0-9]*)#([0-9]+)$ ]]; then
+  repo=linear:${BASH_REMATCH[1]} number=${BASH_REMATCH[2]} where="Linear issue ${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
+  linear="node $(dirname "$(readlink -f "$0")")/../skills/issue-channel/scripts/linear.mjs"
+  checker=node
+elif [[ $issue =~ ^([^/#[:space:]]+/[^/#[:space:]]+)#([0-9]+)$ ]]; then
+  repo=${BASH_REMATCH[1]} number=${BASH_REMATCH[2]} where="GitHub issue $repo#$number" checker=gh
+else
+  die "--issue must look like owner/repo#123 or linear:TEAM#123"
+fi
+for bin in herdr "$launcher" "$checker" jq; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
 [[ -d $cwd ]] || die "--cwd $cwd is not a directory"
 [[ -z $resume || $resume =~ ^[0-9a-f-]{36}$ ]] || die "--resume must be a session uuid"
 if herdr agent get "$name" >/dev/null 2>&1; then die "an agent named $name is already running"; fi
@@ -82,20 +89,27 @@ for _ in $(seq 1 20); do
 done
 herdr agent get "$name" >/dev/null 2>&1 || die "herdr did not recognize claude in pane $pane"
 
-prompt="Subscribe with issuechan to the GitHub issue $repo#$number using session name \"$name\" (issue_subscribe with session=\"$name\"), confirm it is listed with issue_subscriptions, then post a short reply on the issue with issue_reply (done=false) saying you are listening as session $name and that '/bot $name <message>' reaches you."
-# The prompt timing out is not the verdict (the agent may still finish): the verdict is its own reply on GitHub,
+prompt="Subscribe with issuechan to the $where using session name \"$name\" (issue_subscribe with repo=\"$repo\", issue=$number, session=\"$name\"), confirm it is listed with issue_subscriptions, then post a short reply on the issue with issue_reply (done=false) saying you are listening as session $name and that '/bot $name <message>' reaches you."
+# The prompt timing out is not the verdict (the agent may still finish): the verdict is its own reply on the issue,
 # matched by the "🤖 <name> · cc:<id> ·" prefix, so another agent's reply on the same issue can't stand in for it.
 herdr agent prompt "$name" "$prompt" --wait --timeout $((timeout * 1000)) >/dev/null ||
   echo "spawn-agent: agent $name still busy after ${timeout}s, checking the issue" >&2
+# Both providers are normalized to [{url, body}] (bot-marked comments since the launch), then matched the same way.
 own_reply() {
-  gh api "repos/$repo/issues/$number/comments?since=$started&per_page=100" | jq -c --arg p "🤖 $name · " \
-    '[.[] | select((.body | startswith($p)) and (.body | contains("<!-- issue-channel:bot -->")))] | last
-     | if . then {url: .html_url, agent: (try (.body | capture("^🤖 [^ ]+ · (?<a>[a-z]+:[0-9a-f]{8}) ·").a) catch null)} else empty end'
+  if [[ $checker == node ]]; then
+    $linear issue "${repo#linear:}-$number" --json | jq -c --arg t "$started" \
+      '.url as $u | [.comments[] | select(.createdAt >= $t and (.body | contains("issue-channel:bot")))
+       | {url: "\($u)#comment-\(.id[:8])", body}]'
+  else
+    gh api "repos/$repo/issues/$number/comments?since=$started&per_page=100" |
+      jq -c '[.[] | select(.body | contains("<!-- issue-channel:bot -->")) | {url: .html_url, body}]'
+  fi | jq -c --arg p "🤖 $name · " '[.[] | select(.body | startswith($p))] | last
+    | if . then {url, agent: (try (.body | capture("^🤖 [^ ]+ · (?<a>[a-z]+:[0-9a-f]{8}) ·").a) catch null)} else empty end'
 }
 found='' grace=$((SECONDS + 60))
 while :; do
   found=$(own_reply) && [[ -n $found ]] && break
-  ((SECONDS < grace)) || die "no listening reply from session $name on $repo#$number; last screen of pane $pane:"$'\n'"$(read_screen | tail -25)"
+  ((SECONDS < grace)) || die "no listening reply from session $name on $issue; last screen of pane $pane:"$'\n'"$(read_screen | tail -25)"
   herdr pane wait-output "$pane" --match '__never__' --timeout 3000 >/dev/null 2>&1 || true
 done
 reply=$(jq -r .url <<<"$found") agent=$(jq -r '.agent // empty' <<<"$found")
