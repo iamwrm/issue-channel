@@ -9,7 +9,7 @@ $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42
 $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42 --resume <fork id> --task "..."
 ```
 
-Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the URL of the agent's "listening" comment.
+Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `reply` is the URL of the agent's own "listening" comment and `agent` its `cc:<id8>` tag from that comment. A non-zero exit means no agent was left running: the script closed the tab it created, so a retry under the same name is safe.
 
 | Option | |
 |---|---|
@@ -18,7 +18,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the
 | `--resume` | start from a session log, e.g. an edited fork from [`../session-fork`](../session-fork/README.md) |
 | `--task` | prompt sent after it is listening (not waited for) |
 | `--cwd` | working directory (default: current) |
-| `--timeout` | seconds to wait for the subscribe step (default 180) |
+| `--timeout` | seconds to wait for the subscribe step (default 180); after it the script still looks for the reply for 60 s before failing |
 
 ## What it enforces
 
@@ -29,7 +29,9 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the
   - "trust this folder" ("Yes, I trust this folder", preselected)
 
   Any other `Enter to confirm` dialog stops the script and prints the screen.
-- It verifies instead of assuming: it fails unless herdr recognizes the agent and a bot-marked comment appears on the issue after launch.
+- It verifies instead of assuming: it fails unless herdr recognizes the agent and **that agent's own** reply (prefix `🤖 <name> · cc:<id> ·`, bot marker) appears on the issue after launch. Another agent's reply on the same issue doesn't count.
+- The verdict is the reply, not the prompt: a subscribe prompt that outlives `--timeout` is not a failure while the reply can still arrive.
+- A failure after the tab exists closes the tab (the last screen is printed first), so a failed spawn never leaves an agent that subscribes later unseen.
 
 ## Steps
 
@@ -37,7 +39,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply"}`, where `reply` is the
 2. Clear the startup dialogs until the prompt footer (`bypass permissions on`) shows.
 3. `herdr agent rename <pane> <name>`.
 4. `herdr agent prompt <name> --wait`: subscribe with `session=<name>`, check `issue_subscriptions`, and post a "listening" reply (`done=false`).
-5. Check the reply on GitHub, then send `--task` if given.
+5. Find the agent's own reply on GitHub (up to `--timeout` + 60 s), then send `--task` if given. On any failure from step 1 on, close the tab.
 
 Teardown: `herdr agent prompt <name> "Unsubscribe from the issue"`, then `herdr tab close <tab>`.
 
@@ -49,6 +51,17 @@ On a throwaway issue (#18, now closed):
 - **Teardown:** the child unsubscribed (`issue_subscriptions` came back empty), and the pane was closed.
 
 Re-tested after the switch to tabs (2026-10-09, throwaway #21, now closed): `--name tabtest` opened its own tab (`w2:tH`) and left the caller's tab with the same pane count. The listening reply was posted in **25 s**, and the tab was closed after the test.
+
+Re-tested 2026-10-21 (Claude Code 2.1.280 via `clauded`, mainbot#58; throwaways #59, #60, now closed) with log-triage tasks:
+
+| Test | Before this fix | After |
+|---|---|---|
+| Subscribe prompt outlives `--timeout 3` | ❌ exit 1, but the agent subscribed and posted "listening" anyway: the caller saw a failure and a live agent stayed on the issue | ✅ exit 0 with its own reply and `cc:` id (26 s) |
+| Agent never replies (repo doesn't exist) | (not run) | ✅ exit 1 after `--timeout` + 60 s, last screen printed, tab closed, no agent left |
+| Two spawns on one issue at once | ❌ both reported the same (the other agent's) reply URL | ✅ each its own reply and `cc:` id (40 s, 172 s) |
+| Fresh spawn + task, `/bot <name>` routing, crash then respawn under the same name, teardown | ✅ (2026-10-21, before the fix) | |
+
+A subscribe step can take ~3 min under load (rt5: the agent loaded the issue-channel skill and read the issue's history first), which is why the timeout alone doesn't decide.
 
 `--resume` together with a `session-fork handoff` was live-tested on 2026-10-09. There was no double subscribe, but the child stays registered on the server under the parent's session name. See [the session-fork live test](../session-fork/README.md#live-test-full-replace-myself-run-with-handoff-2026-10-09).
 

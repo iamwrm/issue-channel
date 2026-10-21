@@ -8,12 +8,17 @@
 #
 # Usage: spawn-agent.sh --name <name> --issue <owner/repo#n> [--resume <session-id>]
 #                       [--task <text>] [--cwd <dir>] [--timeout <s>]
-# Prints JSON: {"name", "tab", "pane", "issue", "reply"}.
+# Prints JSON: {"name", "tab", "pane", "issue", "reply", "agent"}. On failure the new tab is closed again,
+# so a failed spawn leaves no half-started agent behind; a retry under the same name is safe.
 set -euo pipefail
 
 launcher=${ISSUECHAN_LAUNCHER:-claude}
 
 die() { echo "spawn-agent: $*" >&2; exit 1; }
+# Set once the tab exists: a failure after that closes it, so the agent can't come up later unseen.
+tab=''
+cleanup() { [[ -n $tab ]] && herdr tab close "$tab" >/dev/null 2>&1 && echo "spawn-agent: closed tab $tab" >&2; }
+trap 'rc=$?; ((rc)) && cleanup; exit $rc' EXIT
 usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 name='' issue='' resume='' task='' cwd=$PWD timeout=180
@@ -78,15 +83,25 @@ done
 herdr agent get "$name" >/dev/null 2>&1 || die "herdr did not recognize claude in pane $pane"
 
 prompt="Subscribe with issuechan to the GitHub issue $repo#$number using session name \"$name\" (issue_subscribe with session=\"$name\"), confirm it is listed with issue_subscriptions, then post a short reply on the issue with issue_reply (done=false) saying you are listening as session $name and that '/bot $name <message>' reaches you."
+# The prompt timing out is not the verdict (the agent may still finish): the verdict is its own reply on GitHub,
+# matched by the "🤖 <name> · cc:<id> ·" prefix, so another agent's reply on the same issue can't stand in for it.
 herdr agent prompt "$name" "$prompt" --wait --timeout $((timeout * 1000)) >/dev/null ||
-  die "agent $name did not finish subscribing in ${timeout}s; inspect with: herdr agent read $name"
-
-# Verify on GitHub: a bot-marked comment posted since the launch.
-reply=$(gh api "repos/$repo/issues/$number/comments?since=$started&per_page=100" |
-  jq -r '[.[] | select(.body | contains("<!-- issue-channel:bot -->"))] | last | .html_url // empty')
-[[ -n $reply ]] || die "no listening reply found on $repo#$number; inspect with: herdr agent read $name"
+  echo "spawn-agent: agent $name still busy after ${timeout}s, checking the issue" >&2
+own_reply() {
+  gh api "repos/$repo/issues/$number/comments?since=$started&per_page=100" | jq -c --arg p "🤖 $name · " \
+    '[.[] | select((.body | startswith($p)) and (.body | contains("<!-- issue-channel:bot -->")))] | last
+     | if . then {url: .html_url, agent: (try (.body | capture("^🤖 [^ ]+ · (?<a>[a-z]+:[0-9a-f]{8}) ·").a) catch null)} else empty end'
+}
+found='' grace=$((SECONDS + 60))
+while :; do
+  found=$(own_reply) && [[ -n $found ]] && break
+  ((SECONDS < grace)) || die "no listening reply from session $name on $repo#$number; last screen of pane $pane:"$'\n'"$(read_screen | tail -25)"
+  herdr pane wait-output "$pane" --match '__never__' --timeout 3000 >/dev/null 2>&1 || true
+done
+reply=$(jq -r .url <<<"$found") agent=$(jq -r '.agent // empty' <<<"$found")
 
 [[ -n $task ]] && herdr agent prompt "$name" "$task" >/dev/null
+tab_out=$tab tab='' # spawned: keep the tab from here on
 
-jq -n --arg name "$name" --arg tab "$tab" --arg pane "$pane" --arg issue "$repo#$number" --arg reply "$reply" \
-  '{name: $name, tab: $tab, pane: $pane, issue: $issue, reply: $reply}'
+jq -n --arg name "$name" --arg tab "$tab_out" --arg pane "$pane" --arg issue "$repo#$number" --arg reply "$reply" --arg agent "$agent" \
+  '{name: $name, tab: $tab, pane: $pane, issue: $issue, reply: $reply, agent: $agent}'
