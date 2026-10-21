@@ -1,11 +1,12 @@
 # spawn-agent.sh
 
-Start a Claude Code agent in a new herdr tab and have it listen to a GitHub issue through issuechan. One command, with the launch rules built in, so an agent can't start Claude Code the wrong way.
+Start a Claude Code agent in a new herdr tab and have it listen to a GitHub or Linear issue through issuechan. One command, with the launch rules built in, so an agent can't start Claude Code the wrong way.
 
 It needs the herdr pane manager (`herdr` in `PATH`, run from inside a herdr pane). It is optional: the server and the issuechan channel work without it. Set `ISSUECHAN_DIR` to your issue-channel checkout to use the paths below.
 
 ```sh
 $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42
+$ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue linear:ENG#123
 $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42 --resume <fork id> --task "..."
 ```
 
@@ -14,7 +15,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 | Option | |
 |---|---|
 | `--name` | herdr agent name **and** issuechan session name (`[a-z][a-z0-9_-]{0,31}`), so `/bot <name> …` reaches it |
-| `--issue` | `owner/repo#n` |
+| `--issue` | `owner/repo#n` (GitHub) or `linear:TEAM#n` (Linear ENG-123 = `linear:ENG#123`; checked with `skills/issue-channel/scripts/linear.mjs`, which needs `linear.env`) |
 | `--resume` | start from a session log, e.g. an edited fork from [`../session-fork`](../session-fork/README.md) |
 | `--task` | prompt sent after it is listening (not waited for) |
 | `--cwd` | working directory (default: current) |
@@ -39,7 +40,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 2. Clear the startup dialogs until the prompt footer (`bypass permissions on`) shows.
 3. `herdr agent rename <pane> <name>`.
 4. `herdr agent prompt <name> --wait`: subscribe with `session=<name>`, check `issue_subscriptions`, and post a "listening" reply (`done=false`).
-5. Find the agent's own reply on GitHub (up to `--timeout` + 60 s), then send `--task` if given. On any failure from step 1 on, close the tab.
+5. Find the agent's own reply on the issue (up to `--timeout` + 60 s), then send `--task` if given. On any failure from step 1 on, close the tab.
 
 Teardown: `herdr agent prompt <name> "Unsubscribe from the issue"`, then `herdr tab close <tab>`.
 
@@ -60,6 +61,8 @@ Re-tested 2026-10-21 (Claude Code 2.1.280 via `clauded`, mainbot#58; throwaways 
 | Agent never replies (repo doesn't exist) | (not run) | ✅ exit 1 after `--timeout` + 60 s, last screen printed, tab closed, no agent left |
 | Two spawns on one issue at once | ❌ both reported the same (the other agent's) reply URL | ✅ each its own reply and `cc:` id (40 s, 172 s) |
 | Fresh spawn + task, `/bot <name>` routing, crash then respawn under the same name, teardown | ✅ (2026-10-21, before the fix) | |
+
+Linear `--issue` (2026-10-21, throwaway REN-117, now Done; GitHub #61 alongside as a regression check, now closed): both spawned at once. `linear:REN#117` came up in 34 s with its own reply and `cc:` id, and `/bot ltlin …` on REN-117 was answered in 7 s. The GitHub spawn took 155 s, also with its own reply.
 
 A subscribe step can take ~3 min under load (rt5: the agent loaded the issue-channel skill and read the issue's history first), which is why the timeout alone doesn't decide.
 
