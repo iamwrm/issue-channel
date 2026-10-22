@@ -1,8 +1,8 @@
 # spawn-agent.sh
 
-Start a Claude Code agent in a new herdr tab and have it listen to a GitHub or Linear issue through issuechan. One command, with the launch rules built in, so an agent can't start Claude Code the wrong way.
+Start a Claude Code agent in a new herdr tab or tmux window and have it listen to a GitHub or Linear issue through issuechan. One command, with the launch rules built in, so an agent can't start Claude Code the wrong way.
 
-It needs the herdr pane manager (`herdr` in `PATH`, run from inside a herdr pane). It is optional: the server and the issuechan channel work without it. Set `ISSUECHAN_DIR` to your issue-channel checkout to use the paths below.
+It runs from inside a [herdr](#herdr-and-tmux) pane (`herdr` in `PATH`) or a tmux session (`tmux` in `PATH`). Both are optional: the server and the issuechan channel work without it. Set `ISSUECHAN_DIR` to your issue-channel checkout to use the paths below.
 
 ```sh
 $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42
@@ -14,23 +14,24 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 
 | Option | |
 |---|---|
-| `--name` | herdr agent name **and** issuechan session name (`[a-z][a-z0-9_-]{0,31}`), so `/bot <name> …` reaches it |
+| `--name` | herdr agent name (tmux: window name) **and** issuechan session name (`[a-z][a-z0-9_-]{0,31}`), so `/bot <name> …` reaches it |
 | `--issue` | `owner/repo#n` (GitHub) or `linear:TEAM#n` (Linear ENG-123 = `linear:ENG#123`; checked with `skills/issue-channel/scripts/linear.mjs`, which needs `linear.env`) |
 | `--resume` | start from a session log, e.g. an edited fork from [`../session-fork`](../session-fork/README.md) |
 | `--task` | prompt sent after it is listening (not waited for) |
 | `--cwd` | working directory (default: current) |
 | `--timeout` | seconds to wait for the subscribe step (default 180); after it the script still looks for the reply for 60 s before failing |
+| `--mux` | `herdr` or `tmux`; default: herdr inside a herdr pane (`HERDR_ENV=1`), else tmux inside tmux (`$TMUX` set) |
 
 ## What it enforces
 
-- It runs only inside herdr (`HERDR_ENV=1`) and always uses a **new** tab in the caller's workspace, labelled with the agent name (`--no-focus`). It never splits a pane (split panes keep shrinking as agents pile up) and never uses tmux or a background shell.
+- It runs only inside herdr (`HERDR_ENV=1`) or tmux (`$TMUX`) and always uses a **new** herdr tab in the caller's workspace (`--no-focus`) or a **new** tmux window in the caller's session (`-d`, no focus change), labelled with the agent name. It never splits a pane (split panes keep shrinking as agents pile up) and never uses a background shell.
 - It launches only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan [--resume <id>]`, never with `-p`, because `-p` can't load channels. `ISSUECHAN_LAUNCHER` defaults to `claude`; set it if you start Claude Code through a wrapper.
 - It answers only known startup dialogs:
   - the dev-channel warning ("I am using this for local development", preselected)
   - "trust this folder" ("Yes, I trust this folder", preselected)
 
   Any other `Enter to confirm` dialog stops the script and prints the screen.
-- It verifies instead of assuming: it fails unless herdr recognizes the agent and **that agent's own** reply (prefix `🤖 <name> · cc:<id> ·`, bot marker) appears on the issue after launch. Another agent's reply on the same issue doesn't count.
+- It verifies instead of assuming: it fails unless (with herdr) herdr recognizes the agent and **that agent's own** reply (prefix `🤖 <name> · cc:<id> ·`, bot marker) appears on the issue after launch. Another agent's reply on the same issue doesn't count.
 - The verdict is the reply, not the prompt: a subscribe prompt that outlives `--timeout` is not a failure while the reply can still arrive.
 - A failure after the tab exists closes the tab (the last screen is printed first), so a failed spawn never leaves an agent that subscribes later unseen.
 
@@ -43,6 +44,44 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 5. Find the agent's own reply on the issue (up to `--timeout` + 60 s), then send `--task` if given. On any failure from step 1 on, close the tab.
 
 Teardown: `herdr agent prompt <name> "Unsubscribe from the issue"`, then `herdr tab close <tab>`.
+
+## herdr and tmux
+
+The steps are the same; only the pane calls differ.
+
+| Step | herdr | tmux |
+|---|---|---|
+| New tab | `herdr tab create --label <name> --no-focus` | `tmux new-window -d -n <name>`, tagged `@issuechan_agent=<name>` |
+| Name already taken | `herdr agent get <name>` succeeds | a window tagged `<name>` runs something other than a shell (an agent that exited back to its shell, or crashed, frees the name) |
+| Read the screen, send keys | `herdr pane read` / `send-keys` | `tmux capture-pane -p` / `send-keys` |
+| Prompt | `herdr agent prompt <name> [--wait]` | bracketed paste (`load-buffer` + `paste-buffer -p`) then Enter, so a multi-line prompt is one message. tmux can't tell when the agent is idle, so the reply check waits `--timeout` + 60 s instead |
+| Failure cleanup | `herdr tab close <tab>` | `tmux kill-window -t <window>` |
+
+tmux teardown: paste "Unsubscribe from the issue" the same way, check the screen, then `tmux kill-window -t <window>`.
+
+```sh
+p=%7   # the "pane" from the JSON output
+printf '%s' 'Unsubscribe from <owner/repo>#<n> with issue_unsubscribe and confirm with issue_subscriptions. Do not post on the issue.' |
+  tmux load-buffer -b td - && tmux paste-buffer -p -r -d -b td -t "$p" && sleep 0.5 && tmux send-keys -t "$p" Enter
+tmux capture-pane -p -t "$p" | tail -15          # wait until it confirms
+tmux kill-window -t <tab>
+```
+
+The new window gets the tmux server's environment, not the caller's. Put anything the agent needs (for example `CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF=1` on a box without nonessential traffic) in a wrapper and point `ISSUECHAN_LAUNCHER` at it.
+
+### Live test, tmux (2026-10-22, Claude Code 2.1.308, tmux 3.5a, no herdr)
+
+Throwaway mainbot#67 (now closed), spawned from inside a Claude Code session in tmux:
+
+| Test | Result |
+|---|---|
+| Spawn + two-line `--task` | ✅ listening reply with its own `cc:` id in **15.5 s**; the task arrived as one message and was answered on the issue |
+| Same name while that agent runs | ✅ exit 1, `an agent named tmuxtest is already running` |
+| `/bot tmuxtest ping` | ✅ pushed to the child, `pong (tmuxtest)`, 👀 → 🚀 |
+| Agent never replies (repo doesn't exist, `--timeout 5`) | ✅ exit 1 after 68 s, last screen printed, window closed |
+| Teardown (paste unsubscribe, `kill-window`) | ✅ `issue_subscriptions` empty, window gone |
+
+Not tested with tmux: `--resume`, Linear `--issue`, two spawns at once.
 
 ## Live test (2026-10-09, Claude Code 2.1.295)
 

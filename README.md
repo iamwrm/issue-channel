@@ -11,7 +11,7 @@ GitHub ──signed webhook──► Cloudflare tunnel ──► server (contain
 - `server/`: dependency-free Node 24 server (`node:sqlite`). It verifies `X-Hub-Signature-256`, stores **every** event (raw payload plus extracted columns, deduplicated by delivery id), and serves a key-protected long-poll API with structured filters (no raw SQL).
 - `core/`: the harness-neutral engine (`engine.mjs`, pure logic in `lib.mjs`, GitHub/Linear helpers), plus the MCP stdio wrapper (`issuechan.mjs`). Claude Code uses a [channel](https://code.claude.com/docs/en/channels-reference) ([setup and the `/resume` pitfall](adapters/claude-code/README.md)); Codex uses app-server user input ([setup](adapters/codex/README.md)); **Pi** uses a native extension with durable user steering ([setup and status marker](adapters/pi/README.md)). The same five issue tools manage subscriptions, replies and request completion. Replies carry bot markers and non-allowlisted authors are ignored. Legacy `channel/` paths remain shims.
 - `session-fork/session-fork.mjs`: fork a Claude Code session log into an edited copy that `claude --resume <id>` loads (CLM-style context editing, applied offline). `mirror` prints the session as numbered turns; `mirror --full` writes the whole context as an editable file (one block per prompt, reply, tool call, output or signed reasoning), and `fork <session> <live.md>` turns the edited file into the new session (`fork <session> <plan.json>` still replaces or drops whole turns, for dispatch); and `handoff` copies the issuechan subscription state to the fork. Used by the "replace myself" and "dispatch" prompts in `PROMPTS.md`; details in [`session-fork/README.md`](session-fork/README.md).
-- `spawn/spawn-agent.sh`: start a new agent in its own herdr tab, launched with the required `claude` flags, and have it listen to an issue under its own session name. See [`spawn/README.md`](spawn/README.md).
+- `spawn/spawn-agent.sh`: start a new agent in its own herdr tab or tmux window, launched with the required `claude` flags, and have it listen to an issue under its own session name. See [`spawn/README.md`](spawn/README.md).
 - `deploy/issue-channel.sh`: plain `sudo docker` deployment, with the server container and a `cloudflared` container on a private network.
 
 ## Quick start
@@ -188,7 +188,7 @@ How to start, restart and compact agents (Claude Code in herdr; Codex and pi are
 
 | Task | How |
 |---|---|
-| Spawn a new agent on an issue | `spawn/spawn-agent.sh` ([spawn/README.md](spawn/README.md)): new herdr tab, subscribes under its own session name |
+| Spawn a new agent on an issue | `spawn/spawn-agent.sh` ([spawn/README.md](spawn/README.md)): new herdr tab or tmux window, subscribes under its own session name |
 | Restart an agent in place | `spawn/restart-agent.sh --pane <p> --session <id> [--then "<next>"]`: same session, the channel reloads with the current code |
 | An agent compacts **itself** | [`live-context`](skills/live-context/SKILL.md): `ctx open` → edit the file with one script → `ctx apply [--then "<next>"]` → the switch happens when the turn ends → `ctx report` for the API-measured before/after |
 | Compact **another** agent | `session-fork.mjs mirror --full <its id> --out live.md` → edit → `spawn/restart-agent.sh --pane <p> --session <id> --fork live.md` ([session-fork/README.md](session-fork/README.md)) |
