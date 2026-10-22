@@ -4,24 +4,26 @@
 # The launch rules live here so agents don't have to remember them:
 #   - only in a new herdr tab or tmux window (never a split pane or a background shell)
 #   - only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan`
-#     (ISSUECHAN_LAUNCHER defaults to `claude`; set it to a wrapper if you use one. Never `-p`, which can't load channels)
+#     (the launcher is $ISSUECHAN_LAUNCHER if set, else the calling agent's own start command, read from its process
+#     by spawn/launch.sh so a `clauded` agent spawns `clauded`, else `claude`. Never `-p`, which can't load channels)
 #
 # Usage: spawn-agent.sh --name <name> --issue <owner/repo#n | linear:TEAM#n> [--resume <session-id>]
 #                       [--task <text>] [--cwd <dir>] [--timeout <s>] [--mux herdr|tmux]
 # --mux defaults to herdr inside a herdr pane (HERDR_ENV=1), else tmux inside tmux ($TMUX).
-# Prints JSON: {"name", "tab", "pane", "issue", "reply", "agent"} (tmux: tab is the window id, pane the pane id).
+# Prints JSON: {"name", "tab", "pane", "issue", "reply", "agent", "launch"} (tmux: tab is the window id, pane the pane id).
 # On failure the new tab is closed again, so a failed spawn leaves no half-started agent behind;
 # a retry under the same name is safe.
 set -euo pipefail
 
-launcher=${ISSUECHAN_LAUNCHER:-claude}
+HERE=$(dirname "$(readlink -f "$0")")
+. "$HERE/launch.sh"
 
 die() { echo "spawn-agent: $*" >&2; exit 1; }
 # Set once the tab exists: a failure after that closes it, so the agent can't come up later unseen.
 tab=''
 cleanup() { [[ -n $tab ]] && mux_close >/dev/null 2>&1 && echo "spawn-agent: closed tab $tab" >&2; }
 trap 'rc=$?; ((rc)) && cleanup; exit $rc' EXIT
-usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 name='' issue='' resume='' task='' cwd=$PWD timeout=180 mux=''
 while (($#)); do
@@ -106,13 +108,17 @@ esac
 [[ $name =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "--name must match [a-z][a-z0-9_-]{0,31}"
 if [[ $issue =~ ^linear:([A-Z][A-Z0-9]*)#([0-9]+)$ ]]; then
   repo=linear:${BASH_REMATCH[1]} number=${BASH_REMATCH[2]} where="Linear issue ${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
-  linear="node $(dirname "$(readlink -f "$0")")/../skills/issue-channel/scripts/linear.mjs"
+  linear="node $HERE/../skills/issue-channel/scripts/linear.mjs"
   checker=node
 elif [[ $issue =~ ^([^/#[:space:]]+/[^/#[:space:]]+)#([0-9]+)$ ]]; then
   repo=${BASH_REMATCH[1]} number=${BASH_REMATCH[2]} where="GitHub issue $repo#$number" checker=gh
 else
   die "--issue must look like owner/repo#123 or linear:TEAM#123"
 fi
+if [[ -n ${ISSUECHAN_LAUNCHER:-} ]]; then launch_fallback "$ISSUECHAN_LAUNCHER"
+elif [[ -n ${CLAUDE_CODE_SESSION_ID:-} ]] && launch_detect "$CLAUDE_CODE_SESSION_ID"; then :
+else launch_fallback claude; fi
+launcher=${LAUNCH_ARGV[0]}
 for bin in "$mux" "$launcher" "$checker" jq; do command -v "$bin" >/dev/null || die "$bin not found in PATH"; done
 [[ -d $cwd ]] || die "--cwd $cwd is not a directory"
 [[ -z $resume || $resume =~ ^[0-9a-f-]{36}$ ]] || die "--resume must be a session uuid"
@@ -123,8 +129,7 @@ started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 pane=''
 mux_open
 
-cmd="$launcher"' --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan'
-[[ -n $resume ]] && cmd+=" --resume $resume"
+cmd=$(launch_cmd ${resume:+--resume "$resume"})
 mux_run "$cmd"
 
 # Startup dialogs. Answer only the ones we know; stop on anything else.
@@ -180,4 +185,4 @@ reply=$(jq -r .url <<<"$found") agent=$(jq -r '.agent // empty' <<<"$found")
 tab_out=$tab tab='' # spawned: keep the tab from here on
 
 jq -n --arg name "$name" --arg tab "$tab_out" --arg pane "$pane" --arg issue "$repo#$number" --arg reply "$reply" --arg agent "$agent" \
-  '{name: $name, tab: $tab, pane: $pane, issue: $issue, reply: $reply, agent: $agent}'
+  --arg launch "$cmd" '{name: $name, tab: $tab, pane: $pane, issue: $issue, reply: $reply, agent: $agent, launch: $launch}'

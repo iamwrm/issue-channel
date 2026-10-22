@@ -28,7 +28,7 @@ The following script and session-fork procedure are **for Claude Code, not Pi**.
 
 ```sh
 # plain restart in place: same session and context, the channel reloads with the current code
-setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --session "$CLAUDE_CODE_SESSION_ID" \
+setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "${HERDR_PANE_ID:-$TMUX_PANE}" --session "$CLAUDE_CODE_SESSION_ID" \
   --name <herdr name> --then "<what to do once back>" > /tmp/restart.json 2> /tmp/restart.log < /dev/null &
 ```
 
@@ -48,7 +48,7 @@ setsid nohup $ISSUECHAN_DIR/spawn/restart-agent.sh --pane "$HERDR_PANE_ID" --ses
 | A restart takes about 8–14 s. Compaction saves what the edit drops | 58k → 42–51k tokens in the tests |
 | Agents may ask before restarting themselves when the request comes as pasted text; a `/bot` from the user is the trusted way to ask | Seen in T3 |
 
-Without herdr: `/mcp` → reconnect `issuechan` reloads just the channel (no compaction).
+It works in herdr and in tmux (pane `%N`). You come back with your own start command: the script reads it from your process, so `clauded` stays `clauded` and `claude` stays `claude`; don't pass `--launcher` or set `ISSUECHAN_LAUNCHER` for this. In neither herdr nor tmux: `/mcp` → reconnect `issuechan` reloads just the channel (no compaction).
 
 ## Other sessions
 

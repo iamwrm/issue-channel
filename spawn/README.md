@@ -10,7 +10,7 @@ $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue linear:ENG#123
 $ISSUECHAN_DIR/spawn/spawn-agent.sh --name worker1 --issue owner/repo#42 --resume <fork id> --task "..."
 ```
 
-Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `reply` is the URL of the agent's own "listening" comment and `agent` its `cc:<id8>` tag from that comment. A non-zero exit means no agent was left running: the script closed the tab it created, so a retry under the same name is safe.
+Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent", "launch"}`, where `reply` is the URL of the agent's own "listening" comment and `agent` its `cc:<id8>` tag from that comment. A non-zero exit means no agent was left running: the script closed the tab it created, so a retry under the same name is safe.
 
 | Option | |
 |---|---|
@@ -18,6 +18,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 | `--issue` | `owner/repo#n` (GitHub) or `linear:TEAM#n` (Linear ENG-123 = `linear:ENG#123`; checked with `skills/issue-channel/scripts/linear.mjs`, which needs `linear.env`) |
 | `--resume` | start from a session log, e.g. an edited fork from [`../session-fork`](../session-fork/README.md) |
 | `--task` | prompt sent after it is listening (not waited for) |
+| launcher | `$ISSUECHAN_LAUNCHER` if set, else **your own** start command (read from your process by [`launch.sh`](launch.sh), so a `clauded` agent spawns `clauded`), else `claude`. The command used is in the output as `launch` |
 | `--cwd` | working directory (default: current) |
 | `--timeout` | seconds to wait for the subscribe step (default 180); after it the script still looks for the reply for 60 s before failing |
 | `--mux` | `herdr` or `tmux`; default: herdr inside a herdr pane (`HERDR_ENV=1`), else tmux inside tmux (`$TMUX` set) |
@@ -25,7 +26,7 @@ Output (JSON): `{"name", "tab", "pane", "issue", "reply", "agent"}`, where `repl
 ## What it enforces
 
 - It runs only inside herdr (`HERDR_ENV=1`) or tmux (`$TMUX`) and always uses a **new** herdr tab in the caller's workspace (`--no-focus`) or a **new** tmux window in the caller's session (`-d`, no focus change), labelled with the agent name. It never splits a pane (split panes keep shrinking as agents pile up) and never uses a background shell.
-- It launches only `$ISSUECHAN_LAUNCHER --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan [--resume <id>]`, never with `-p`, because `-p` can't load channels. `ISSUECHAN_LAUNCHER` defaults to `claude`; set it if you start Claude Code through a wrapper.
+- It launches only `<launcher> --dangerously-skip-permissions --dangerously-load-development-channels server:issuechan [--resume <id>]`, never with `-p`, because `-p` can't load channels. The launcher is `$ISSUECHAN_LAUNCHER`, else the calling agent's own start command (see [Launcher detection](#launcher-detection)), else `claude`.
 - It answers only known startup dialogs:
   - the dev-channel warning ("I am using this for local development", preselected)
   - "trust this folder" ("Yes, I trust this folder", preselected)
@@ -109,9 +110,37 @@ A subscribe step can take ~3 min under load (rt5: the agent loaded the issue-cha
 
 # restart-agent.sh
 
-Restart a Claude Code agent **in place** (same herdr pane), optionally into a **CLM-compacted fork** of its session, so it continues with a smaller, edited context. Works on another agent or, run detached, on the agent itself. Usage and rules: the header of [`restart-agent.sh`](restart-agent.sh) and the skill's [`reference/ops.md`](../skills/issue-channel/reference/ops.md#restart-or-compact-yourself).
+Restart a Claude Code agent **in place** (same herdr pane or tmux pane: `--pane w1:p2` or `--pane %7`; `--mux` overrides), optionally into a **CLM-compacted fork** of its session, so it continues with a smaller, edited context. Works on another agent or, run detached, on the agent itself. Usage and rules: the header of [`restart-agent.sh`](restart-agent.sh) and the skill's [`reference/ops.md`](../skills/issue-channel/reference/ops.md#restart-or-compact-yourself).
 
 Steps: wait until idle → (with `--fork <live.md>`, a `session-fork mirror --full` the agent edited) `session-fork fork` (dropping the turn that did the edit; stale files refused; `live.diff.md` written) + `handoff`, parent state parked → `/exit` → `$ISSUECHAN_LAUNCHER … --resume <id or fork>` in the same pane, answering the known dialogs → restore the herdr name → check the channel process → send `--then`.
+
+**Launcher:** the agent comes back with **its own** start command, read from its process before `/exit` ([Launcher detection](#launcher-detection)): `clauded` stays `clauded`, `claude` stays `claude`. Only when that can't be read: `--launcher`, then `$ISSUECHAN_LAUNCHER`, then `claude`. The log says which, and the output's `launch` field has the command.
+
+**tmux:** pass the tmux pane id (`--pane "$TMUX_PANE"` for yourself). tmux has no agent status, so idle means Claude Code's footer shows the prompt without "esc to interrupt", and gone means the pane's shell has no child process. `/bot !no-compact` and `ctx apply` use `$TMUX_PANE` when `$HERDR_PANE_ID` isn't set.
+
+### Launcher detection
+
+[`launch.sh`](launch.sh) (shared by both scripts) finds how a running agent was started:
+
+1. **The agent's process.** Every process Claude Code starts (its Bash tool, the issuechan channel) has `CLAUDE_CODE_SESSION_ID` in its environment; Claude Code itself doesn't. The parent of such a process is the agent. This also works after a `/resume` inside the TUI: the channel then carries the old id, but the agent's Bash tool has the new one.
+2. **What the pane's shell started.** Climb from the agent to the process whose parent is an interactive shell. A `clauded` script that runs claude as a child is found as `bash …/clauded …` and repeated as the script. One that `exec`s claude leaves claude's own command line, and whatever it exported shows up as an environment difference.
+3. **The command.** That process's arguments, minus `--resume`/`--continue`/`--session-id` and the flags the scripts add (the dev channels it had are kept, `server:issuechan` is added), prefixed with `env NAME=value` for the `CLAUDE_*`, `ANTHROPIC_*`, `ISSUECHAN_*`, `DISABLE_*` and `NODE_*` variables the launch added on top of the shell. If one of those is a credential (`…KEY`, `TOKEN`, `SECRET`, `PASSWORD`), detection gives up rather than type it into the pane, and the fallback applies.
+
+Limits: a start command with a positional prompt (`claude "do X"`) repeats that prompt on restart. An agent started directly by tmux or herdr (no shell in between) isn't detected. Detection goes by session id, not by pane, so it is the same in herdr and tmux and for restarting yourself or another agent.
+
+### Live test, tmux restart (2026-10-22, Claude Code 2.1.308, tmux 3.5a, no herdr)
+
+Throwaway mainbot#69 (now closed): `rtplain` spawned with plain `claude` (detected from the calling agent), `rtclauded` spawned through a stand-in `clauded` (a script running claude as a child with `CLAUDE_CODE_RT_MARK=clauded`). `ISSUECHAN_LAUNCHER` unset for the restarts.
+
+| Test | Result |
+|---|---|
+| `restart-agent.sh --pane %3` on `rtplain`, from outside | ✅ 30 s; resumed with `claude … --resume <same id>`, replied after `--then`, `CLAUDE_CODE_RT_MARK` unset |
+| Same on `rtclauded` | ✅ 31 s; resumed with `…/clauded … --resume <same id>`, `CLAUDE_CODE_RT_MARK=clauded` in the resumed agent |
+| `rtclauded` restarts **itself** on `/bot` (`setsid nohup … --pane "$TMUX_PANE" …`) | ✅ 14 s, launcher read as `clauded`, channel pid found, "self-restart ok" posted |
+
+The channel check also accepts a node started by absolute path (`/…/bin/node`), which made the first two runs warn "no issuechan channel process found" before it was fixed.
+
+Not tested in tmux: `--fork` (`ctx apply`) and `/bot !no-compact`, which use the same restart path. Not re-tested in herdr.
 
 **Harnesses:** Claude Code only for now (`$ISSUECHAN_LAUNCHER`, `--resume`, Claude Code's session logs and dialogs). Support for other agents such as **Codex** and **pi** is planned (see `BACKLOG.md`).
 

@@ -54,8 +54,8 @@ if (cmd === 'open') {
   try { ({ report } = applyLive(loadTurns(findLog(sid), { live: true }), parseLive(readFileSync(file, 'utf8')), 'check', { source: sid })); }
   catch (e) { die(e.message.replace('make one with mirror --full', 'run `ctx open` again').replace('the session changed after mirror --full; make a new one', 'the conversation moved on since `ctx open`; run it again and redo the edit')); }
   if (report.kept === 0 && report.notes === 0) die('this edit leaves nothing (0 blocks kept, no notes); check your edit script, run `ctx open` again and redo it');
-  const pane = process.env.HERDR_PANE_ID;
-  if (!pane) die('the switch needs a herdr pane (HERDR_PANE_ID is not set)');
+  const pane = process.env.HERDR_PANE_ID || process.env.TMUX_PANE;
+  if (!pane) die('the switch needs a herdr or tmux pane (HERDR_PANE_ID and TMUX_PANE are not set)');
   // One pending switch per session: a second apply in the same turn replaces the first. That one is still
   // waiting for the turn to end (nothing forked yet); stop its whole process group.
   const pending = join(tmpdir(), `live-context-${sid}.pending`);
