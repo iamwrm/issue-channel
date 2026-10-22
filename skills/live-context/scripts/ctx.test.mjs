@@ -23,7 +23,7 @@ function setup() {
   ];
   writeFileSync(join(dir, `${SID}.jsonl`), e.map((x) => JSON.stringify(x)).join('\n') + '\n');
   const tmp = mkdtempSync(join(tmpdir(), 'ctx-tmp-'));
-  const env = { ...process.env, HOME: home, TMPDIR: tmp, CLAUDE_CODE_SESSION_ID: SID, HERDR_PANE_ID: '' };
+  const env = { ...process.env, HOME: home, TMPDIR: tmp, CLAUDE_CODE_SESSION_ID: SID, HERDR_PANE_ID: '', TMUX_PANE: '' };
   return (...args) => spawnSync('node', [CTX, ...args], { encoding: 'utf8', env });
 }
 
@@ -40,7 +40,7 @@ test('open writes the context without the current turn and without reasoning tex
   assert.deepEqual(l.stdout.trim().split('\n').map((x) => x.split(' ').slice(0, 2).join(' ')), ['[[TURN 1]]', '[[BLOCK b0001', '[[BLOCK b0002', '[[BLOCK b0003', '[[TURN 2]]']);
 });
 
-test('apply checks the edit before anything else, and needs a herdr pane for the switch', () => {
+test('apply checks the edit before anything else, and needs a herdr or tmux pane for the switch', () => {
   const ctx = setup();
   const file = ctx('open').stdout.match(/Context file: (\S+)/)[1];
   writeFileSync(file, readFileSync(file, 'utf8').replace('(reasoning block: keep or delete)', 'edited'));
@@ -52,7 +52,7 @@ test('apply checks the edit before anything else, and needs a herdr pane for the
   writeFileSync(f2, full.slice(0, full.indexOf('[[TURN 1]]'))); // an edit script that cut everything
   assert.match(ctx('apply').stderr, /leaves nothing/);
   writeFileSync(f2, full);
-  assert.match(ctx('apply').stderr, /needs a herdr pane/);
+  assert.match(ctx('apply').stderr, /needs a herdr or tmux pane/);
 });
 
 test('apply without open, and unknown commands', () => {

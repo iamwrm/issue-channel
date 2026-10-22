@@ -19,12 +19,12 @@ export default {
   // notifications sent before that.
   resumeDelayMs: 3000,
   deliver: (mcp, { content, meta }) => mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } }),
-  // `/bot !no-compact`: swap this session for a reset fork in its herdr pane (spawn/no-compact.mjs, detached, since
+  // `/bot !no-compact`: swap this session for a reset fork in its herdr or tmux pane (spawn/no-compact.mjs, detached, since
   // the swap ends this process). It must not need the model, so it fails here, before anything changes, when it
   // can't run.
   noCompact({ repo, issue, session, agent, comment_id, reply_to, onFailed }, { log } = {}) {
-    const pane = process.env.HERDR_PANE_ID
-    if (!pane) throw new Error('the session is not in a herdr pane (HERDR_PANE_ID is not set)')
+    const pane = process.env.HERDR_PANE_ID || process.env.TMUX_PANE
+    if (!pane) throw new Error('the session is not in a herdr or tmux pane (HERDR_PANE_ID and TMUX_PANE are not set)')
     if (agent?.agent !== 'cc') throw new Error('no Claude Code session id')
     const dir = path.join(os.tmpdir(), `no-compact-${agent.id}`)
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })

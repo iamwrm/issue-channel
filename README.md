@@ -184,7 +184,7 @@ mkdir -p ~/.codex/skills  && ln -sfn "$ISSUECHAN_DIR/skills/issue-channel" ~/.co
 
 ### Agent lifecycle
 
-How to start, restart and compact agents (Claude Code in herdr; Codex and pi are in [BACKLOG.md](BACKLOG.md#b4-restart-and-live-context-for-codex-and-pi)). Why it works this way: [docs/DECISIONS.md](docs/DECISIONS.md). Measured results: [session-fork/RESULTS.md](session-fork/RESULTS.md).
+How to start, restart and compact agents (Claude Code in herdr or tmux; Codex and pi are in [BACKLOG.md](BACKLOG.md#b4-restart-and-live-context-for-codex-and-pi)). Why it works this way: [docs/DECISIONS.md](docs/DECISIONS.md). Measured results: [session-fork/RESULTS.md](session-fork/RESULTS.md).
 
 | Task | How |
 |---|---|
