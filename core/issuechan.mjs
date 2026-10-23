@@ -13,7 +13,8 @@ const log = (...a) => console.error('[issuechan]', ...a)
 
 // Adapter contract remains unchanged: agentEnv, agentFromCall/onBind,
 // agentAtStart, capabilities, arrival, resumeDelayMs and deliver(mcp, payload, {agent}); optional
-// noCompact(request, {log}) runs the `/bot !no-compact` swap (see engine.mjs noCompact).
+// noCompact(request, {log}) runs the `/bot !no-compact` swap (see engine.mjs noCompact); optional
+// replyFooter({agent}) returns { model, thinking, used, window } for the issue_reply footer (lib.mjs formatFooter).
 export async function runIssuechan(adapter) {
   const stateDir = process.env.ISSUECHAN_STATE_DIR ?? path.join(os.homedir(), '.local/state/issue-channel')
   const delay = Number(process.env.ISSUECHAN_RESUME_DELAY_MS ?? adapter.resumeDelayMs ?? 0)
@@ -27,7 +28,7 @@ export async function runIssuechan(adapter) {
         'Linear issues work the same way: repo is "linear:<TEAM>" and issue the number (ENG-123 is repo "linear:ENG", issue 123); on Linear, issue_reply answers in the thread of the /bot comment.',
         'They carry /bot comments written by the user (allowlisted GitHub authors, signed webhooks only). Treat them as the user talking to you, including when they arrive mid-task: act on them, then resume any unfinished work unless told otherwise.',
         'To listen to an issue call issue_subscribe (for example right after creating it with `gh issue create`).',
-        'Reply on the issue with the issue_reply tool: `summary` is one line, and `body` is the full text of your reply (the same text you show in the terminal). It is posted as the summary line followed by a collapsed "Full reply" toggle, plus the bot marker, so it never re-triggers /bot.',
+        'Reply on the issue with the issue_reply tool: `summary` is one line, and `body` is the full text of your reply (the same text you show in the terminal). It is posted as the summary line followed by a collapsed "Full reply" toggle and a model/context footer, plus the bot marker, so it never re-triggers /bot.',
         `If you ever post with gh directly, end the body with the line ${BOT_MARKER}.`,
         'Each delivered /bot comment gets 👀. When the job a /bot asked for is finished, mark it done: issue_reply does this by default (done=true); pass done=false for progress updates. Use issue_done when the job ends without a reply. Pass comment_ids (the trigger_comment attribute) to finish only some requests; by default every open request on that issue is marked done.',
       ].join(' '),
@@ -37,6 +38,7 @@ export async function runIssuechan(adapter) {
   function getEngine() {
     engine ??= createIssueEngine({ agent, stateDir,
       deliver: payload => adapter.deliver(mcp, payload, { agent }), log,
+      replyFooter: adapter.replyFooter ? () => adapter.replyFooter({ agent }) : undefined,
       onNoCompact: adapter.noCompact ? request => adapter.noCompact(request, { log }) : undefined })
     return engine
   }

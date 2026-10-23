@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { IssueBuffer, formatDelivery, formatReply, isForSession, isGitHub, isLinear, issueLabel, replyTag, resolveAgent } from './lib.mjs'
+import { IssueBuffer, formatDelivery, formatFooter, formatReply, isForSession, isGitHub, isLinear, issueLabel, replyTag, resolveAgent } from './lib.mjs'
 import { ghApi as rawGhApi, ghComment as rawGhComment, myLogin as rawMyLogin } from './github.mjs'
 import * as rawLinear from './linear.mjs'
 
@@ -387,8 +387,9 @@ export function createIssueEngine(options = {}) {
         if (name === 'issue_reply') {
           const tag = replyTag({ name: session, agent })
           // Validate the reply before any external side effect.
-          const body = formatReply({ ...a, tag })
-          const url = isLinear(a.repo) ? await linearReply(a, tag) : await ghComment(a.repo, a.issue, body)
+          formatReply({ ...a, tag })
+          const reply = { ...a, tag, footer: await replyFooter() }
+          const url = isLinear(a.repo) ? await linearReply(reply) : await ghComment(a.repo, a.issue, formatReply(reply))
           return text(a.done === false ? url : `${url}\n${await markDone(a.repo, a.issue, a.comment_ids)}`)
         }
         if (name === 'issue_done') return text(await markDone(a.repo, a.issue, a.comment_ids))
@@ -458,11 +459,18 @@ export function createIssueEngine(options = {}) {
   }
 
   // Reply/done helpers intentionally retain the existing GitHub/Linear semantics.
-  async function linearReply(a, tag) {
+  // The adapter's model/context stats for the reply footer. Best effort: a failure only drops the footer.
+  async function replyFooter() {
+    if (!options.replyFooter) return ''
+    try { return formatFooter({ agent: agent?.agent, ...await options.replyFooter() }) }
+    catch (err) { log(`reply footer: ${err.message}`); return '' }
+  }
+
+  async function linearReply(a) {
     const s = subs.get(`${a.repo}#${a.issue}`)
     const cid = a.reply_to ?? a.comment_ids?.[0] ?? [...(s?.open ?? [])].at(-1)
     const parentId = cid == null ? undefined : (s?.roots.get(String(cid)) ?? String(cid))
-    const c = await linear.comment(a.repo, a.issue, formatReply({ ...a, tag, format: 'linear' }), { parentId })
+    const c = await linear.comment(a.repo, a.issue, formatReply({ ...a, format: 'linear' }), { parentId })
     return c.url
   }
 

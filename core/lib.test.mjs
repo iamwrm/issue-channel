@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatReply, lineDiff, BOT_MARKER, replyTag, resolveAgent } from './lib.mjs'
+import { parseTrigger, isForSession, IssueBuffer, formatDelivery, formatFooter, formatReply, lineDiff, BOT_MARKER, replyTag, resolveAgent } from './lib.mjs'
 
 test('parseTrigger', () => {
   assert.deepEqual(parseTrigger('/bot'), { target: null })
@@ -163,4 +163,20 @@ test('updates formatting has no invented /bot and replay filters bot issue bodie
 
 test('lineDiff', () => {
   assert.equal(lineDiff('a\nb\nc', 'a\nB\nc'), '  a\n- b\n+ B\n  c')
+})
+
+test('formatFooter: agent/model:thinking used%/window, unknown parts left out', () => {
+  assert.equal(formatFooter({ agent: 'cc', model: 'claude-opus-5-5', thinking: 'medium', used: 180_000, window: 1_000_000 }), 'cc/claude-opus-5-5:medium 18%/1M')
+  assert.equal(formatFooter({ agent: 'pi', model: 'gpt-x', used: 0, window: 272_000 }), 'pi/gpt-x 0%/272k')
+  assert.equal(formatFooter({ agent: 'cc', model: 'm', thinking: 'high', window: 200_000 }), 'cc/m:high', 'no usage, no context part')
+  assert.equal(formatFooter({ agent: 'cc', used: 1500, window: 1_500_000 }), 'cc 0%/1.5M')
+  assert.equal(formatFooter({ agent: 'cc', thinking: 'high', window: 200_000 }), '', 'agent and effort alone: no footer')
+  assert.equal(formatFooter({}), '')
+})
+
+test('formatReply: footer line below the toggle (GitHub) or the section (Linear), before the marker', () => {
+  const gh = formatReply({ summary: 's', body: 'b', footer: 'cc/m <x> 5%/1M' })
+  assert.ok(gh.endsWith(`</details>\n\n<sub>cc/m &lt;x&gt; 5%/1M</sub>\n\n${BOT_MARKER}\n`))
+  assert.ok(formatReply({ summary: 's', body: 'b', footer: 'f', format: 'linear' }).endsWith('+++\n\nf\n\n[//]: # (issue-channel:bot)\n'))
+  assert.equal(formatReply({ summary: 's', body: 'b', footer: ' ' }), formatReply({ summary: 's', body: 'b' }))
 })

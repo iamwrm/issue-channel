@@ -174,16 +174,29 @@ export const issueLabel = (repo, issue) => isLinear(repo) ? `Linear issue ${repo
 // Reply layout on the issue: "🤖 <tag> · <summary>", then a clickable "Full reply" toggle.
 // Linear: the reply sits in the /bot comment's thread, the toggle is Linear's collapsible section (+++), and the
 // invisible LINEAR_MARKER tells replies apart when the token acts as a user (as the app, the author does too).
-export function formatReply({ summary, body, tag, format = 'github' }) {
+// An optional `footer` line (see formatFooter) goes below the toggle, so it shows while the reply is collapsed.
+export function formatReply({ summary, body, tag, footer, format = 'github' }) {
   const line = String(summary ?? '').replace(/\s+/g, ' ').trim()
   if (!line) throw new Error('summary is required')
   const full = String(body ?? '').trim()
   if (!full) throw new Error('body is required')
+  const foot = String(footer ?? '').replace(/\s+/g, ' ').trim()
   const head = tag ? `🤖 ${tag} · ${line}` : `🤖 ${line}`
-  if (format === 'linear') return `${head}\n\n+++ Full reply\n\n${full}\n\n+++\n\n${LINEAR_MARKER}\n`
-  const esc = head.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  return `${esc}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${BOT_MARKER}\n`
+  if (format === 'linear') return `${head}\n\n+++ Full reply\n\n${full}\n\n+++\n\n${foot ? `${foot}\n\n` : ''}${LINEAR_MARKER}\n`
+  const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return `${esc(head)}\n\n<details>\n<summary>Full reply</summary>\n\n${full}\n\n</details>\n\n${foot ? `<sub>${esc(foot)}</sub>\n\n` : ''}${BOT_MARKER}\n`
 }
+
+// The reply footer: "<agent>/<model>:<thinking> <context used %>/<context window>", e.g. "cc/claude-opus-5-5:medium 18%/1M".
+// Unknown fields are left out; "" when neither the model nor the context use is known.
+export function formatFooter({ agent, model, thinking, used, window } = {}) {
+  const win = Number(window), n = Number(used)
+  const ctx = win > 0 && used != null && n >= 0 ? `${Math.round(100 * n / win)}%/${tokenCount(win)}` : ''
+  if (!model && !ctx) return ''
+  const who = model ? [agent, model].filter(Boolean).join('/') + (thinking ? `:${thinking}` : '') : agent
+  return [who, ctx].filter(Boolean).join(' ')
+}
+const tokenCount = n => n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n)
 
 export function formatDelivery({ repo, issue, title, trigger, items }) {
   const head = `${issueLabel(repo, issue)}${title ? ` "${title}"` : ''}: ` + (trigger
