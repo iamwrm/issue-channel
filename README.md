@@ -190,6 +190,7 @@ How to start, restart and compact agents (Claude Code in herdr or tmux; Codex an
 |---|---|
 | Spawn a new agent on an issue | `spawn/spawn-agent.sh` ([spawn/README.md](spawn/README.md)): new herdr tab or tmux window, subscribes under its own session name |
 | Restart an agent in place | `spawn/restart-agent.sh --pane <p> --session <id> [--then "<next>"]`: same session, the channel reloads with the current code |
+| Bring all listening agents back after a machine/container restart | `spawn/fleet.sh snapshot` before, `spawn/fleet.sh recover` after (tmux; [spawn/README.md](spawn/README.md#snapshot-and-recover-fleetsh)) |
 | An agent compacts **itself** | [`live-context`](skills/live-context/SKILL.md): `ctx open` → edit the file with one script → `ctx apply [--then "<next>"]` → the switch happens when the turn ends → `ctx report` for the API-measured before/after |
 | Compact **another** agent | `session-fork.mjs mirror --full <its id> --out live.md` → edit → `spawn/restart-agent.sh --pane <p> --session <id> --fork live.md` ([session-fork/README.md](session-fork/README.md)) |
 | Reset an idle agent's context **without a summary** (no-compact) | `/bot !no-compact [<name>]` on its issue, matched by code in the channel and never shown to the model; lines after it become the successor's first prompt. By hand: `spawn/restart-agent.sh --pane <p> --session <id> --no-compact` ([spawn/README.md](spawn/README.md#no-compact)) |

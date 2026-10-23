@@ -142,6 +142,31 @@ The channel check also accepts a node started by absolute path (`/…/bin/node`)
 
 Not tested in tmux: `--fork` (`ctx apply`) and `/bot !no-compact`, which use the same restart path. Not re-tested in herdr.
 
+## Snapshot and recover (fleet.sh)
+
+Bring every listening agent back after the machine or container restarts (tmux and every process gone, `$HOME` kept). Claude Code in tmux only for now.
+
+```sh
+$ISSUECHAN_DIR/spawn/fleet.sh snapshot          # before: save the live agents (refuses while one is busy)
+$ISSUECHAN_DIR/spawn/fleet.sh recover           # after, from any shell: reopen them all from latest.json
+$ISSUECHAN_DIR/spawn/fleet.sh status            # which saved agents run, which live ones aren't saved
+$ISSUECHAN_DIR/spawn/fleet.sh recover --dry-run # print the windows and commands only
+```
+
+- **snapshot** starts from the **running channels**, not the state files (those outlive their agents: test leftovers, crashed sessions). For each agent with subscriptions it saves the session id, issuechan session name, subscriptions, cwd, tmux session/window index/name/`@issuechan_agent` tag and start command ([launcher detection](#launcher-detection), so no credentials), plus the server URL. It refuses while an agent is busy (`esc to interrupt`; the agent running the snapshot doesn't count) or when a transcript's last line is cut off; `--force` saves anyway. Written to `~/.local/state/issue-channel/snapshots/<UTC>.json` and `latest.json` (0600), or `--out <file>`.
+- **recover** goes through the agents in tmux order. It skips any already running (by session id, so a second recover is a no-op) and opens the saved window (a new tmux session if needed, the saved index if free). It runs the start command with `--resume <id>`, answers the known dialogs, then waits until the server lists the agent's session name on **every** saved issue, registered after the resume (`GET /api/subscriptions?active_within=…`, with `API_KEY` from the issue-channel `.env`). Nothing is posted on the issues. The channel re-subscribes from its own state file and gets every `/bot` posted while it was down. An agent that fails gets its window closed and an `error`, the others go on, and the exit status is 1. Output: `[{name, session_id, status, window, pane, error?}]`.
+- Test: `fleet.test.mjs` runs two fake agents on a private tmux server: snapshot, kill the server, recover, check the fake server's registrations, run again (no-op), and check that an agent that never registers fails with its window closed.
+
+### Live test, fleet.sh (2026-10-23, Claude Code 2.1.308, tmux 3.5a)
+
+Throwaway mainbot#75 (now closed), agent `fleettest` spawned next to two real agents.
+
+| Test | Result |
+|---|---|
+| `snapshot` with 3 live agents and 7 state files | ✅ the 3 live ones saved; test leftovers (including one subscribed to a nonexistent repo) left out |
+| kill `fleettest`'s window, `recover` | ✅ 6 s, same window name and tag, registered on #75 per the real server; the two running agents skipped |
+| kill it again, post `/bot fleettest … pong` while it's down, `recover` | ✅ it got the `/bot` on resume and replied "pong" |
+
 **Harnesses:** Claude Code only for now (`$ISSUECHAN_LAUNCHER`, `--resume`, Claude Code's session logs and dialogs). Support for other agents such as **Codex** and **pi** is planned (see `BACKLOG.md`).
 
 ## Live test (2026-10-10, throwaway issue, `clauded`)

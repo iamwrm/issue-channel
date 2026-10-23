@@ -8,6 +8,10 @@
 #                                the launch set a credential (…KEY/TOKEN/SECRET/PASSWORD) that can't be repeated.
 #   launch_cmd [--resume <id>]   prints the full command line for a shell prompt, quoted.
 #   launch_fallback <launcher>   the same variables from a plain launcher name (no detection).
+#   launch_ready <read> <key> <wait> [<timeout s>]   answer the known startup dialogs until the prompt shows, using
+#                                the caller's screen functions (<read> prints the screen, <key> enter|down sends a
+#                                key, <wait> waits for the screen to change); prints the screen and returns 1 on an
+#                                unknown dialog or the timeout.
 #
 # How: every process Claude Code starts (its Bash tool, the issuechan channel) has CLAUDE_CODE_SESSION_ID in its
 # environment and Claude Code itself doesn't, so the parent of such a process is the agent. From there it climbs
@@ -106,4 +110,19 @@ launch_cmd() {
     if [[ $w =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then out+=" $w"; else out+=" $(printf '%q' "$w")"; fi
   done
   echo "${out# }"
+}
+
+launch_ready() {
+  local read=$1 key=$2 wait=$3 deadline=$((SECONDS + ${4:-90})) s
+  while :; do
+    s=$($read)
+    if grep -q 'bypass permissions on' <<<"$s" && ! grep -q 'Enter to confirm' <<<"$s"; then return 0
+    elif grep -q 'I am using this for local development' <<<"$s"; then $key enter # option 1 is preselected
+    elif grep -q '❯ No, exit' <<<"$s"; then $key down # Claude Code 2.1.284 preselects "No, exit" in a new folder
+    elif grep -qE 'Yes, I trust this folder|trust the files in this folder' <<<"$s"; then $key enter
+    elif grep -q 'Enter to confirm' <<<"$s"; then echo "unknown startup dialog:"$'\n'"$s"; return 1
+    fi
+    ((SECONDS < deadline)) || { echo "the prompt did not show:"$'\n'"$s"; return 1; }
+    $wait 'bypass permissions on|Enter to confirm'
+  done
 }
