@@ -134,24 +134,7 @@ mux_run "$cmd"
 
 # Startup dialogs. Answer only the ones we know; stop on anything else.
 read_screen() { mux_read; }
-deadline=$((SECONDS + 90))
-while :; do
-  s=$(read_screen)
-  if grep -q 'bypass permissions on' <<<"$s" && ! grep -q 'Enter to confirm' <<<"$s"; then
-    break
-  elif grep -q 'I am using this for local development' <<<"$s"; then
-    mux_key enter # option 1 is preselected
-  elif grep -q '❯ No, exit' <<<"$s"; then
-    mux_key down # Claude Code 2.1.284 preselects "No, exit" in a new folder
-  elif grep -qE 'Yes, I trust this folder|trust the files in this folder' <<<"$s"; then
-    mux_key enter # "Yes, I trust this folder" is selected
-  elif grep -q 'Enter to confirm' <<<"$s"; then
-    die "unknown startup dialog in pane $pane, answer it by hand:"$'\n'"$s"
-  fi
-  ((SECONDS < deadline)) || die "$launcher did not become ready in pane $pane:"$'\n'"$s"
-  # Wait until the screen changes (or a short timeout) before looking again.
-  mux_wait 'bypass permissions on|Enter to confirm'
-done
+why=$(launch_ready read_screen mux_key mux_wait 90) || die "$launcher in pane $pane: $why"
 
 mux_name
 

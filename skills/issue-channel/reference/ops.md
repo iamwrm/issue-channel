@@ -53,3 +53,7 @@ It works in herdr and in tmux (pane `%N`). You come back with your own start com
 ## Other sessions
 
 `herdr agent list` shows the agents and their panes; `~/.local/state/issue-channel/cc-<session id>.json` holds each Claude Code session's subscriptions. Message another local session with your harness's agent messaging, or `herdr agent prompt <pane> "…"`, and say who you are and why.
+
+## Before and after a machine restart
+
+Claude Code in tmux: `$ISSUECHAN_DIR/spawn/fleet.sh snapshot` while every agent is idle (it refuses otherwise), then after the restart `$ISSUECHAN_DIR/spawn/fleet.sh recover` from any shell. It reopens each saved agent's window with `--resume`, verifies through the server that it's listening again, and posts nothing. `fleet.sh status` shows what's missing. Details: [spawn/README.md](../../../spawn/README.md#snapshot-and-recover-fleetsh).
