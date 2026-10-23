@@ -10,6 +10,7 @@ clauded --dangerously-skip-permissions --dangerously-load-development-channels s
 ## Which session the channel thinks it is
 The channel identifies its session by `CLAUDE_CODE_SESSION_ID`, which Claude Code puts in the MCP server's environment **when it spawns the server**. That id:
 - tags every reply (`🤖 <name> · cc:<id8>`);
+- finds the transcript that the reply footer (`cc/<model>:<effort> <used>/<window>`) is read from;
 - names the state file `~/.local/state/issue-channel/cc-<id>.json`: subscriptions, cursors, open 👀 requests;
 - drives auto-resume: on start, the channel re-subscribes to everything in that file, from the saved cursor, so a `/bot` posted while it was down is still delivered.
 

@@ -446,3 +446,16 @@ test('/bot !no-compact: no text means nothing to deliver; a failed swap or a hoo
   assert.equal(posted.length, 1)
   assert.match(posted[0][2], /!no-compact failed: not in herdr/)
 })
+
+test('issue_reply: the adapter footer goes below the toggle; a failing footer is dropped, not fatal', async t => {
+  const f = await fixture(t), posted = []
+  const ghComment = async (...a) => { posted.push(a[2]); return 'url' }
+  const e = f.make({ ghComment, replyFooter: async () => ({ model: 'm-1', thinking: 'high', used: 50_000, window: 200_000 }) })
+  const r = await e.callTool('issue_reply', { repo, issue: 1, summary: 's', body: 'b', done: false })
+  assert.notEqual(r.isError, true, resultText(r))
+  assert.match(posted[0], /<\/details>\n\n<sub>pi\/m-1:high 25%\/200k<\/sub>\n\n/)
+  const e2 = f.make({ ghComment, replyFooter: () => { throw new Error('no transcript') } })
+  await e2.callTool('issue_reply', { repo, issue: 1, summary: 's', body: 'b', done: false })
+  assert.doesNotMatch(posted[1], /<sub>/)
+  assert.ok(posted[1].trimEnd().endsWith(BOT_MARKER))
+})

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { footerStats } from './footer.mjs'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -18,6 +19,7 @@ export default {
   // Claude Code registers its channel listener a moment after the MCP handshake, and drops
   // notifications sent before that.
   resumeDelayMs: 3000,
+  replyFooter: ({ agent }) => footerStats(agent?.agent === 'cc' ? agent.id : undefined),
   deliver: (mcp, { content, meta }) => mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } }),
   // `/bot !no-compact`: swap this session for a reset fork in its herdr or tmux pane (spawn/no-compact.mjs, detached, since
   // the swap ends this process). It must not need the model, so it fails here, before anything changes, when it

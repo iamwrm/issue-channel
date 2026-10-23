@@ -221,6 +221,10 @@ Every reply starts with `🤖 <tag> · <summary>`, so replies from different ses
 
 The name is what `/bot <name>` targets. `<agent>:<id8>` comes from `resolveAgent()` in `core/lib.mjs`: `ISSUECHAN_AGENT_ID=<agent>:<id>` if set, otherwise the first match in the adapter's `agentEnv` table (Claude Code: `cc` ← `CLAUDE_CODE_SESSION_ID`). A new harness declares its own in its adapter. The same id names the saved state file (`<agent>-<id>.json`). The bot marker stays the last line, so the self-filter is unaffected.
 
+Below the collapsed full reply, a footer line shows the model, thinking level and context use, e.g. `cc/claude-opus-5-5:medium 18%/1M` (`<agent>/<model>:<thinking> <context used>/<context window>`). The adapter's optional `replyFooter()` supplies the numbers and unknown parts are left out, so a harness without one gets no footer.
+- **Claude Code** reads them from what it already writes: model and context tokens from the last main-thread assistant turn in the session transcript (`~/.claude/projects/*/<id>.jsonl`), the effort level from `CLAUDE_EFFORT` or `modelSettings.<model>.effortLevel` / `effortLevel` in `~/.claude/settings.json`, and the window from the model id (1M for Claude 5 models and `[1m]` ids, 200k for other Claude models). `ISSUECHAN_CONTEXT_WINDOW=<tokens>` overrides the window.
+- **Pi** uses its own `ctx.model`, `getThinkingLevel()` and `ctx.getContextUsage()`.
+
 Comments posted with `gh` directly should use the same format: `node core/reply-format.mjs --summary "…" --body-file reply.md | gh issue comment N -R owner/name -F -`. For hand-written comments (such as a live status comment), start with the same `🤖 <tag> ·` prefix and end with the marker.
 
 ## API

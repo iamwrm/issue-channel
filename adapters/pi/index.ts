@@ -175,6 +175,10 @@ export default function issueChannel(pi: ExtensionAPI): void {
           if (pending) { if (!before.has(pending.id)) r.paused = false; schedule(r); }
           show(r);
         },
+        replyFooter: () => {
+          const usage = r?.ctx.getContextUsage();
+          return { model: r?.ctx.model?.id, thinking: pi.getThinkingLevel(), used: usage?.tokens ?? undefined, window: usage?.contextWindow };
+        },
         onStatus: status => {
           if (!r || r.stopped || active !== r) return;
           r.status = status;
