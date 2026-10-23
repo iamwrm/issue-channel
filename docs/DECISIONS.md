@@ -73,3 +73,13 @@ Squash to one commit when asked; `gh pr merge --rebase`.
 2026-10-11
 
 Decisions go here, results next to the code they test ([`session-fork/RESULTS.md`](../session-fork/RESULTS.md)), open work in [`BACKLOG.md`](../BACKLOG.md), how-tos in the READMEs. An issue holds links, the request being worked on and short-lived discussion, so it can be consolidated or wiped at any time. Consolidating an issue starts by moving anything durable into the repo through a PR ([`skills/issue-channel/reference/consolidate.md`](../skills/issue-channel/reference/consolidate.md)).
+
+## D15. Every reply shows model, thinking level and context use, below the collapsed text
+2026-10-23
+
+A footer line `cc/claude-opus-5-5:medium 18%/1M` (`<agent>/<model>:<thinking> <context used>/<window>`) sits below the collapsed **Full reply**, so context pressure is visible on every reply without expanding it, and helps decide when to consolidate, compact or reload. Plain text, no emoji. Chosen over a footer inside the toggle (hidden until expanded) and stats in the toggle label (crowded, percentage only). Adapters supply the numbers and unknown parts are dropped; Claude Code's window is inferred from the model id (Claude 5 = 1M), with `ISSUECHAN_CONTEXT_WINDOW` as the override. [#25](https://github.com/iamwrm/issue-channel/pull/25); discussed on [mainbot#66](https://github.com/iamwrm/mainbot/issues/66).
+
+## D16. A consolidate request clears the whole procedure, including the merge
+2026-10-23
+
+Consolidation is low-risk: it moves docs, backs up first, and the backup restores anything deleted. So "consolidate" is the clearance to commit, merge the consolidation PR (`--rebase`), rewrite the description and delete the comments without stopping to ask. It covers only that PR; every other merge still needs an explicit "merge" ([D13](#d13-prs-in-this-repo-are-one-commit-merged-by-rebase)). Asked on [mainbot#66](https://github.com/iamwrm/mainbot/issues/66).

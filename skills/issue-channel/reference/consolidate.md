@@ -2,6 +2,8 @@
 
 The user's request reads like "consolidate this issue". **The repo is the source of truth; the issue is a working surface** ([D14](../../../docs/DECISIONS.md#d14-the-repo-is-the-source-of-truth-issues-are-disposable-working-surfaces)). So consolidating means moving anything durable into the repo first, then shrinking the issue to links plus the work in progress. Nothing still open may be lost.
 
+**A consolidate request is the clearance for the whole procedure** ([D16](../../../docs/DECISIONS.md#d16-a-consolidate-request-clears-the-whole-procedure-including-the-merge)): commit, open the PR, merge it yourself with `gh pr merge --rebase`, rewrite the description and delete the comments, without stopping to ask. It clears only the consolidation PR, not other open PRs. Stop and ask only when something durable doesn't fit the repo, or the move would change code rather than docs.
+
 ## Steps
 
 1. **Back up:** `node scripts/backup-issue.mjs <ref>`. Note the printed path; you will cite it.
@@ -11,8 +13,8 @@ The user's request reads like "consolidate this issue". **The repo is the source
    - measured results → next to the code they test (e.g. `session-fork/RESULTS.md`),
    - open items → `BACKLOG.md`, one heading per item with a stable id,
    - how-tos → the READMEs; design rationale → `DESIGN.md`.
-   History is not copied: `git log`, the PRs and the backup cover it. If the user hasn't asked for this yet, propose the mapping first (the "Propose issue to repo" prompt in `PROMPTS.md`) and wait for their go.
-4. **After the PR is merged, rewrite the description** as: topic and agent (one or two lines), links to the repo docs, the request being worked on, and the backlog ids this issue covers. No decision, result or open item lives only in the issue.
+   History is not copied: `git log`, the PRs and the backup cover it. If the user hasn't asked for this yet, propose the mapping first (the "Propose issue to repo" prompt in `PROMPTS.md`) and wait for their go. Once asked, merge the PR yourself (`--rebase`).
+4. **After merging the PR, rewrite the description** as: topic and agent (one or two lines), links to the repo docs, the request being worked on, and the backlog ids this issue covers. No decision, result or open item lives only in the issue.
 5. **Post at most one short comment**, in the open: what moved where, the PR link, and the backup path. Start with the `🤖 <tag> ·` prefix and end with the marker (GitHub `<!-- issue-channel:bot -->`; Linear `[//]: # (issue-channel:bot)`). Times are HKT.
 6. **Delete** the older comments, the user's and yours, including the consolidation request itself. If new comments arrived after step 1, back up again first.
 7. **Mark the request done** with `issue_done` (`comment_ids` = the request). A deleted comment is reported as "gone"; that's expected.

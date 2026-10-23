@@ -30,10 +30,10 @@ Propose moving the durable content of the subscribed issue into <owner/repo>, wh
 
 ## Consolidate the conversation
 
-Version: `v20261011.1`
+Version: `v20261023.1`
 
 ```text
-Consolidate the whole subscribed issue using the issue-channel skill (reference/consolidate.md): back up the issue and all its comments, move anything durable (decisions, results, open items, how-tos) into the repo as one PR, and once it is merged rewrite the description as links plus the active work, post at most one short comment saying what moved where (PR link, backup path), delete all the older comments including this request, and mark it done with issue_done.
+Consolidate the whole subscribed issue using the issue-channel skill (reference/consolidate.md): back up the issue and all its comments, move anything durable (decisions, results, open items, how-tos) into the repo as one PR and merge it yourself with --rebase (this request is the merge clearance; don't stop to ask), then rewrite the description as links plus the active work, post at most one short comment saying what moved where (PR link, backup path), delete all the older comments including this request, and mark it done with issue_done.
 ```
 
 ## Launch a new agent on a new issue
